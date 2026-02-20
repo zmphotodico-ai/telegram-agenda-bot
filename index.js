@@ -8,24 +8,44 @@ const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
 
-// Configuração de Autenticação com a Agenda
+// Configura o acesso à agenda
 const auth = new google.auth.JWT(
-  GOOGLE_CONFIG.client_email,
-  null,
-  GOOGLE_CONFIG.private_key,
+  GOOGLE_CONFIG.client_email, null, GOOGLE_CONFIG.private_key,
   ['https://www.googleapis.com/auth/calendar']
 );
 const calendar = google.calendar({ version: 'v3', auth });
+
+// Função para listar eventos do dia
+async function listarEventos() {
+  const agora = new Date();
+  const fimDoDia = new Date();
+  fimDoDia.setHours(23, 59, 59);
+
+  const res = await calendar.events.list({
+    calendarId: 'primary',
+    timeMin: agora.toISOString(),
+    timeMax: fimDoDia.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+  return res.data.items;
+}
 
 app.post("/webhook", async (req, res) => {
   const message = req.body.message;
   if (!message) return res.sendStatus(200);
 
   const chatId = message.chat.id;
-  const textoDoCliente = message.text || "";
+  const texto = message.text || "";
 
   try {
-    // Chamando o Gemini 1.5 Flash (Versão Estável)
+    // 1. Busca eventos reais na sua agenda
+    const eventos = await listarEventos();
+    const agendaHoje = eventos.length > 0 
+      ? eventos.map(e => `- ${e.summary} (${new Date(e.start.dateTime).toLocaleTimeString()})`).join('\n')
+      : "Nenhum compromisso para hoje.";
+
+    // 2. Passa essa informação para o Gemini responder ao cliente
     const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
     
     const geminiReq = await fetch(urlGemini, {
@@ -33,27 +53,27 @@ app.post("/webhook", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: {
-          parts: [{ text: "Você é o assistente do Dionizio. Ajude a marcar ensaios. Se o cliente pedir horário, responda que você vai verificar a disponibilidade." }]
+          parts: [{ text: `Você é o assistente do Dionizio. Agenda de hoje:\n${agendaHoje}\nAjude o cliente a marcar um ensaio nos horários vagos.` }]
         },
-        contents: [{ parts: [{ text: textoDoCliente }] }]
+        contents: [{ parts: [{ text: texto }] }]
       })
     });
     
     const geminiRes = await geminiReq.json();
-    const respostaDaIA = geminiRes.candidates?.[0].content.parts[0].text || "Só um instante, estou verificando...";
+    const resposta = geminiRes.candidates?.[0].content.parts[0].text || "Pode repetir?";
 
-    // Enviar resposta para o Telegram
+    // 3. Responde no Telegram
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: respostaDaIA })
+      body: JSON.stringify({ chat_id: chatId, text: resposta })
     });
 
   } catch (e) {
-     console.error("❌ Erro:", e);
+    console.error("❌ Erro:", e);
   }
   res.sendStatus(200);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor pronto na porta ${PORT}`));
+app.listen(PORT, () => console.log("🚀 Bot da Agenda Online!"));
