@@ -4,40 +4,37 @@ const app = express();
 app.use(express.json());
 
 const TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
 app.post("/webhook", async (req, res) => {
+  const message = req.body.message;
+
+  if (!message) {
+    return res.sendStatus(200);
+  }
+
+  const chatId = message.chat.id;
+  const text = message.text || "";
+
   try {
-    const message = req.body.message;
-
-    if (!message) {
-      return res.sendStatus(200);
-    }
-
-    const chatId = message.chat.id;
-    const text = message.text || "";
-
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         chat_id: chatId,
-        text: `Você disse: ${text}`
-      })
+        text: "Bot funcionando.",
+      }),
     });
 
-    res.sendStatus(200);
-
-  } catch (error) {
-    console.error("Erro no webhook:", error);
-    res.sendStatus(500);
+  } catch (err) {
+    console.error("Erro ao enviar mensagem:", err);
   }
+
+  res.sendStatus(200);
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log("Servidor rodando");
 });
