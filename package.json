@@ -1,9 +1,8 @@
 {
   "name": "telegram-agenda-bot",
   "version": "1.0.0",
-  "description": "Bot Telegram com Railway",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
