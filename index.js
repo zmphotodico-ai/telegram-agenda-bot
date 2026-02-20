@@ -1,4 +1,4 @@
-const express = require("express");
+import express from "express";
 
 const app = express();
 app.use(express.json());
@@ -19,7 +19,9 @@ app.post("/webhook", async (req, res) => {
 
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         chat_id: chatId,
         text: `Você disse: ${text}`
@@ -27,8 +29,9 @@ app.post("/webhook", async (req, res) => {
     });
 
     res.sendStatus(200);
-  } catch (err) {
-    console.error(err);
+
+  } catch (error) {
+    console.error("Erro no webhook:", error);
     res.sendStatus(500);
   }
 });
@@ -36,5 +39,5 @@ app.post("/webhook", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Servidor rodando na porta", PORT);
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
