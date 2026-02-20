@@ -18,9 +18,11 @@ app.post("/webhook", async (req, res) => {
 
   let respostaDaIA = "Desculpe, estou processando...";
 
-  // 1. Enviando a mensagem do cliente para o Gemini (Versão 3.1) pensar
+  // 1. Enviando a mensagem do cliente para o Gemini (Modelo 1.5 Flash Oficial)
   try {
-    const geminiReq = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-preview:generateContent?key=${GEMINI_KEY}`, {
+    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_KEY}`;
+    
+    const geminiReq = await fetch(urlGemini, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -44,7 +46,7 @@ app.post("/webhook", async (req, res) => {
         respostaDaIA = geminiRes.candidates[0].content.parts[0].text;
     } else {
         console.error("❌ Erro Gemini:", geminiRes);
-        respostaDaIA = "Deu um errinho aqui na minha inteligência, tente de novo!";
+        respostaDaIA = "Deu um errinho aqui na inteligência, tente de novo!";
     }
   } catch (e) {
      console.error("❌ Falha na comunicação com a IA:", e);
@@ -71,5 +73,5 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 Servidor rodando na porta " + PORT);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
