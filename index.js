@@ -13,6 +13,8 @@ app.post("/webhook", async (req, res) => {
   }
 
   const chatId = message.chat.id;
+  // Aqui nós capturamos o que o cliente digitou:
+  const textoDoCliente = message.text || "";
 
   try {
     const respostaTelegram = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -22,17 +24,16 @@ app.post("/webhook", async (req, res) => {
       },
       body: JSON.stringify({
         chat_id: chatId,
-        text: "Bot funcionando."
+        text: `Você disse: ${textoDoCliente}` // Resposta dinâmica!
       })
     });
 
-    // Aqui está o segredo: vamos ler o que o Telegram respondeu!
     const dados = await respostaTelegram.json();
 
     if (!respostaTelegram.ok) {
       console.error("❌ ERRO DO TELEGRAM:", dados);
     } else {
-      console.log("✅ Mensagem enviada com sucesso!");
+      console.log(`✅ Mensagem respondida para o chat ${chatId}`);
     }
 
   } catch (erro) {
