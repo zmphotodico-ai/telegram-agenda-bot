@@ -6,7 +6,7 @@ app.use(express.json());
 const TOKEN = process.env.BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TOKEN}`;
 
-app.post("/", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   const message = req.body.message;
 
   if (message) {
