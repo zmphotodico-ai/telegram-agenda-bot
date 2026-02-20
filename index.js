@@ -18,9 +18,9 @@ app.post("/webhook", async (req, res) => {
 
   let respostaDaIA = "Desculpe, estou processando...";
 
-  // 1. Enviando a mensagem do cliente para o Gemini (Modelo 1.5 Flash Oficial)
+  // 1. Enviando a mensagem do cliente para o Gemini (Modelo 2.0 Flash Oficial)
   try {
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_KEY}`;
+    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
     
     const geminiReq = await fetch(urlGemini, {
       method: "POST",
