@@ -1,69 +1,48 @@
 import express from "express";
+import { google } from "googleapis";
 
 const app = express();
 app.use(express.json());
 
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
+// Carrega as credenciais do Google que você colou no Railway
+const GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
 
 app.post("/webhook", async (req, res) => {
   const message = req.body.message;
-
-  if (!message) {
-    return res.sendStatus(200);
-  }
+  if (!message) return res.sendStatus(200);
 
   const chatId = message.chat.id;
   const textoDoCliente = message.text || "";
 
-  let respostaDaIA = "Desculpe, estou processando...";
-
   try {
-    // A única mudança: usando a versão 2.5 que está com o plano gratuito ativo
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+    // Chamada ao Gemini para processar a conversa
+    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
     
     const geminiReq = await fetch(urlGemini, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: {
-          parts: [{ text: "Você é o assistente virtual do estúdio fotográfico do Dionizio. Seja muito educado, simpático e prestativo. Ajude a tirar dúvidas sobre ensaios. Responda de forma curta, natural e amigável." }]
+          parts: [{ text: "Você é o assistente do fotógrafo Dionizio. Se o cliente quiser agendar, peça o dia e hora. Você verificará a agenda dele no Google Calendar." }]
         },
-        contents: [
-          {
-            parts: [{ text: textoDoCliente }]
-          }
-        ]
+        contents: [{ parts: [{ text: textoDoCliente }] }]
       })
     });
     
     const geminiRes = await geminiReq.json();
-    
-    if (geminiRes.candidates && geminiRes.candidates.length > 0) {
-        respostaDaIA = geminiRes.candidates[0].content.parts[0].text;
-    } else {
-        console.error("❌ Erro Gemini:", geminiRes);
-        respostaDaIA = "Deu um errinho aqui na inteligência, tente de novo!";
-    }
-  } catch (e) {
-     console.error("❌ Falha na comunicação com a IA:", e);
-  }
+    const respostaDaIA = geminiRes.candidates?.[0].content.parts[0].text || "Estou com uma pequena instabilidade, tente novamente.";
 
-  try {
+    // Envia a resposta para o Telegram
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: respostaDaIA
-      })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: respostaDaIA })
     });
-  } catch (erro) {
-    console.error("❌ ERRO AO ENVIAR PARA O TELEGRAM:", erro);
+
+  } catch (e) {
+     console.error("❌ Erro no servidor:", e);
   }
 
   res.sendStatus(200);
@@ -71,5 +50,5 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`🚀 Servidor ativo na porta ${PORT}`);
 });
