@@ -13,22 +13,30 @@ app.post("/webhook", async (req, res) => {
   }
 
   const chatId = message.chat.id;
-  const text = message.text || "";
 
   try {
-    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+    const respostaTelegram = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         chat_id: chatId,
-        text: "Bot funcionando.",
-      }),
+        text: "Bot funcionando."
+      })
     });
 
-  } catch (err) {
-    console.error("Erro ao enviar mensagem:", err);
+    // Aqui está o segredo: vamos ler o que o Telegram respondeu!
+    const dados = await respostaTelegram.json();
+
+    if (!respostaTelegram.ok) {
+      console.error("❌ ERRO DO TELEGRAM:", dados);
+    } else {
+      console.log("✅ Mensagem enviada com sucesso!");
+    }
+
+  } catch (erro) {
+    console.error("❌ ERRO NO SERVIDOR:", erro);
   }
 
   res.sendStatus(200);
@@ -36,5 +44,5 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Servidor rodando");
+  console.log("🚀 Servidor rodando na porta " + PORT);
 });
