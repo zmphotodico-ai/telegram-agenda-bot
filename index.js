@@ -20,7 +20,7 @@ app.post("/webhook", async (req, res) => {
 
   // 1. Enviando a mensagem do cliente para o Gemini pensar
   try {
-    const geminiReq = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`, {
+   const geminiReq = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-preview:generateContent?key=${GEMINI_KEY}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
