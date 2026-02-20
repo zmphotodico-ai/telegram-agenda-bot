@@ -18,9 +18,9 @@ app.post("/webhook", async (req, res) => {
 
   let respostaDaIA = "Desculpe, estou processando...";
 
-  // 1. Enviando a mensagem do cliente para o Gemini (Modelo 2.0 Flash Oficial)
   try {
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+    // A única mudança: usando a versão 2.5 que está com o plano gratuito ativo
+    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
     
     const geminiReq = await fetch(urlGemini, {
       method: "POST",
@@ -41,7 +41,6 @@ app.post("/webhook", async (req, res) => {
     
     const geminiRes = await geminiReq.json();
     
-    // Capturando a resposta do Gemini
     if (geminiRes.candidates && geminiRes.candidates.length > 0) {
         respostaDaIA = geminiRes.candidates[0].content.parts[0].text;
     } else {
@@ -52,7 +51,6 @@ app.post("/webhook", async (req, res) => {
      console.error("❌ Falha na comunicação com a IA:", e);
   }
 
-  // 2. Enviando a resposta inteligente de volta para o Telegram
   try {
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
