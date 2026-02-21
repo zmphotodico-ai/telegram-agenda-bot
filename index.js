@@ -25,51 +25,41 @@ async function buscarAgenda() {
       timeMin: inicio,
       timeMax: fim,
       singleEvents: true,
-      orderBy: 'startTime',
     });
     
     const eventos = response.data.items || [];
-    if (eventos.length === 0) return "A agenda está livre hoje.";
-
-    return "Ocupado hoje nos seguintes horários: " + eventos.map(e => {
-      const d = new Date(e.start.dateTime || e.start.date);
-      return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-    }).join(', ');
+    return eventos.length > 0 
+      ? "Ocupado: " + eventos.map(e => e.summary).join(", ")
+      : "Agenda livre hoje.";
   } catch (err) {
-    console.error("Erro Google:", err);
-    return "Não tenho acesso aos horários agora.";
+    return "ERRO DE PERMISSÃO NO GOOGLE";
   }
 }
 
 app.post("/webhook", async (req, res) => {
-  const message = req.body.message;
-  if (!message) return res.sendStatus(200);
+  const texto = req.body.message?.text || "";
+  const chatId = req.body.message?.chat.id;
 
-  const chatId = message.chat.id;
-  try {
-    const statusAgenda = await buscarAgenda();
-    const urlGemini = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+  if (chatId) {
+    const status = await buscarAgenda();
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
     
-    const geminiReq = await fetch(urlGemini, {
+    const gemini = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: `Você é o assistente do Dionizio. Agenda de hoje: ${statusAgenda}. Se o cliente perguntar de horários, diga quais estão ocupados. Seja muito breve.` }]
-        },
-        contents: [{ parts: [{ text: message.text || "" }] }]
+        systemInstruction: { parts: [{ text: `Você é assistente do Dionizio. Agenda: ${status}. Responda ao cliente.` }] },
+        contents: [{ parts: [{ text: texto }] }]
       })
-    });
+    }).then(r => r.json());
 
-    const data = await geminiReq.json();
-    const respostaIA = data.candidates?.[0]?.content?.parts[0]?.text || "Como posso ajudar?";
-
+    const resposta = gemini.candidates?.[0]?.content?.parts[0]?.text || "Oi!";
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: respostaIA })
+      body: JSON.stringify({ chat_id: chatId, text: resposta })
     });
-  } catch (e) { console.error(e); }
+  }
   res.sendStatus(200);
 });
 
