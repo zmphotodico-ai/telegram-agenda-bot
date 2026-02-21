@@ -1,5 +1,8 @@
 import express from "express";
+import fetch from "node-fetch";
 import { google } from "googleapis";
+
+console.log("🟢 Node version:", process.version);
 
 const app = express();
 app.use(express.json());
@@ -14,7 +17,6 @@ let GOOGLE_CONFIG;
 try {
   GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
 
-  // Corrige quebra de linha da private_key
   GOOGLE_CONFIG.private_key =
     GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
 
@@ -33,11 +35,9 @@ const auth = new google.auth.JWT(
 
 const calendar = google.calendar({ version: "v3", auth });
 
-// 📅 Função para buscar agenda de hoje
+// 📅 Buscar agenda de hoje
 async function buscarAgendaHoje() {
   try {
-    const agora = new Date();
-
     const inicio = new Date();
     inicio.setHours(0, 0, 0, 0);
 
@@ -47,7 +47,7 @@ async function buscarAgendaHoje() {
     console.log("🔎 Buscando eventos entre:", inicio, "e", fim);
 
     const response = await calendar.events.list({
-      calendarId: "zmphoto@zmphoto.com.br", // ⚠ confirme se é o ID correto
+      calendarId: "zmphoto@zmphoto.com.br",
       timeMin: inicio.toISOString(),
       timeMax: fim.toISOString(),
       singleEvents: true,
@@ -64,9 +64,7 @@ async function buscarAgendaHoje() {
 
     return eventos
       .map((e) => {
-        const data = new Date(
-          e.start.dateTime || e.start.date
-        );
+        const data = new Date(e.start.dateTime || e.start.date);
 
         const hora = data.toLocaleTimeString("pt-BR", {
           hour: "2-digit",
@@ -107,6 +105,8 @@ Se perguntarem sobre horários ou agenda, use essas informações.
 Seja curto e educado.
 `;
 
+    console.log("🧠 Enviando para Gemini...");
+
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
       {
@@ -116,7 +116,9 @@ Seja curto e educado.
           contents: [
             {
               role: "user",
-              parts: [{ text: promptSistema + "\n\nCliente: " + textoUsuario }],
+              parts: [
+                { text: promptSistema + "\n\nCliente: " + textoUsuario }
+              ],
             },
           ],
         }),
@@ -125,9 +127,11 @@ Seja curto e educado.
 
     const data = await geminiResponse.json();
 
+    console.log("🧠 Resposta bruta Gemini:", JSON.stringify(data, null, 2));
+
     const respostaIA =
-      data.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "Como posso ajudar?";
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "Não consegui gerar resposta agora.";
 
     await fetch(
       `https://api.telegram.org/bot${TOKEN}/sendMessage`,
