@@ -17,12 +17,12 @@ const calendar = google.calendar({ version: 'v3', auth });
 async function buscarAgenda() {
   try {
     const agora = new Date();
-    // Início e fim do dia de hoje no fuso de Brasília
+    // Início e fim do dia de hoje (ajustado para fuso local)
     const inicio = new Date(agora.setHours(0, 0, 0, 0)).toISOString();
     const fim = new Date(agora.setHours(23, 59, 59, 999)).toISOString();
 
     const response = await calendar.events.list({
-      calendarId: 'primary',
+      calendarId: 'primary', // Se não funcionar, troque por seu email entre aspas
       timeMin: inicio,
       timeMax: fim,
       singleEvents: true,
@@ -38,7 +38,7 @@ async function buscarAgenda() {
     }).join(', ');
   } catch (err) {
     console.error("Erro Google:", err);
-    return "Erro ao acessar a agenda.";
+    return "Não consegui ler a agenda agora.";
   }
 }
 
@@ -58,7 +58,7 @@ app.post("/webhook", async (req, res) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: {
-          parts: [{ text: `Você é o assistente do Dionizio. Info da agenda: ${statusAgenda}. Se o cliente quiser saber horários, use essa info. Seja curto e simpático.` }]
+          parts: [{ text: `Você é o assistente do Dionizio. Info da agenda de hoje: ${statusAgenda}. Informe os horários ocupados ou livres se o cliente perguntar. Seja muito curto e simpático.` }]
         },
         contents: [{ parts: [{ text: textoCliente }] }]
       })
