@@ -4,8 +4,9 @@
   "description": "Bot Telegram para consulta e agendamento na agenda do fotógrafo Dionizio usando Google Calendar + Gemini AI",
   "main": "index.js",
   "type": "module",
+  "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "start": "node index.js",
@@ -26,15 +27,16 @@
     "agendamento",
     "nodejs"
   ],
-  "author": "Seu Nome <seu@email.com>",
+  "author": "Dionizio <seu@email.com>",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/SEU_USUARIO/telegram-agenda-bot/issues"
   },
   "homepage": "https://github.com/SEU_USUARIO/telegram-agenda-bot#readme",
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.21.0",
-    "googleapis": "^144.0.0",
+    "googleapis": "^171.0.0",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
