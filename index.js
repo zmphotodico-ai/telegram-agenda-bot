@@ -8,6 +8,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const CALENDAR_ID = "zmphoto@zmphoto.com.br";
 
 // ====================== Google Calendar Config ======================
 let GOOGLE_CONFIG;
@@ -15,7 +16,7 @@ try {
   GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
   GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
 } catch (err) {
-  console.error("❌ GOOGLE_CONFIG inválido:", err);
+  console.error("❌ GOOGLE_CONFIG inválido ou mal formatado:", err.message);
   process.exit(1);
 }
 
@@ -23,11 +24,10 @@ const auth = new google.auth.JWT(
   GOOGLE_CONFIG.client_email,
   null,
   GOOGLE_CONFIG.private_key,
-  ["https://www.googleapis.com/auth/calendar"]   // ← leitura + escrita
+  ["https://www.googleapis.com/auth/calendar"]  // leitura + escrita
 );
 
 const calendar = google.calendar({ version: "v3", auth });
-const CALENDAR_ID = "zmphoto@zmphoto.com.br";
 
 // ====================== Funções Google Calendar ======================
 
@@ -50,7 +50,9 @@ async function buscarAgendaHoje() {
 
     const eventos = res.data.items || [];
 
-    if (eventos.length === 0) return "Hoje a agenda está completamente livre.";
+    if (eventos.length === 0) {
+      return "Hoje a agenda está **completamente livre**!";
+    }
 
     return eventos
       .map((e) => {
@@ -60,99 +62,99 @@ async function buscarAgendaHoje() {
           minute: "2-digit",
           timeZone: "America/Sao_Paulo",
         });
-        return `• ${e.summary || "Sem título"} às ${hora}`;
+        return `• ${e.summary || "Evento sem título"} às ${hora}`;
       })
       .join("\n");
   } catch (err) {
-    console.error("Erro ao ler agenda:", err?.message || err);
-    return "Não consegui consultar a agenda agora. Tente novamente mais tarde.";
+    console.error("Erro ao consultar agenda:", err?.message || err);
+    return "Não consegui acessar a agenda agora. Tente novamente mais tarde.";
   }
 }
 
 async function criarEvento(summary, startDateTime, durationMinutes = 60, description = "") {
   try {
     const start = new Date(startDateTime);
+    if (isNaN(start.getTime())) throw new Error("Data/hora inválida");
+
     const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
 
     const event = {
       summary: summary.trim(),
       description: description.trim() || undefined,
-      start: {
-        dateTime: start.toISOString(),
-        timeZone: "America/Sao_Paulo",
-      },
-      end: {
-        dateTime: end.toISOString(),
-        timeZone: "America/Sao_Paulo",
-      },
-      // Opcional: reminders, attendees, conferenceData, etc.
+      start: { dateTime: start.toISOString(), timeZone: "America/Sao_Paulo" },
+      end: { dateTime: end.toISOString(), timeZone: "America/Sao_Paulo" },
     };
 
     const res = await calendar.events.insert({
       calendarId: CALENDAR_ID,
       resource: event,
-      sendUpdates: "all",           // envia email se tiver attendees
-      // conferenceDataVersion: 1,  // descomente se quiser Google Meet automático
+      sendUpdates: "all",  // envia email se tiver participantes
     });
 
     return {
       success: true,
       link: res.data.htmlLink,
-      start: start.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
+      startFormatted: start.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }),
     };
   } catch (err) {
-    console.error("Erro ao criar evento:", err?.response?.data || err);
-    return { success: false, error: err?.message || "Erro desconhecido" };
+    console.error("Erro ao criar evento:", err?.response?.data || err.message);
+    return { success: false, error: err.message || "Falha ao criar agendamento" };
   }
 }
 
-// ====================== Telegram helper ======================
+// ====================== Telegram Helper ======================
 async function sendMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
+  const payload = {
+    chat_id: chatId,
+    text,
+    parse_mode: "Markdown",
+  };
+
   for (let tentativa = 1; tentativa <= 3; tentativa++) {
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-          parse_mode: "Markdown",
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) return true;
 
       const errText = await res.text();
-      console.warn(`Telegram falhou (tent ${tentativa}): ${errText}`);
-      await new Promise(r => setTimeout(r, 800 * tentativa));
+      console.warn(`Telegram falhou (tentativa ${tentativa}): ${res.status} - ${errText}`);
+      await new Promise(r => setTimeout(r, 700 * tentativa));
     } catch (err) {
-      console.error("Falha total ao enviar msg:", err);
+      console.error("Erro ao tentar enviar mensagem:", err);
     }
   }
+
+  console.error(`Falha definitiva ao enviar mensagem para chat ${chatId}`);
   return false;
 }
 
-// ====================== Gemini ======================
-async function gerarRespostaComGemini(agendaHoje, perguntaUsuario, chatId) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+// ====================== Gemini (atualizado 2026) ======================
+async function gerarRespostaGemini(agendaHoje, perguntaUsuario) {
+  const MODEL = "gemini-2.5-flash";  // estável e recomendado em fev/2026
+  const url = `https://generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
+
+  console.log(`→ Gemini chamado | Modelo: ${MODEL} | Pergunta: ${perguntaUsuario.substring(0, 80)}...`);
 
   const systemPrompt = `
 Você é o assistente de agendamento do fotógrafo Dionizio.
-Tom: educado, profissional, direto, simpático, respostas curtas (máximo 4 linhas).
+Tom: educado, profissional, simpático, respostas curtas e claras (máximo 4-5 linhas).
 
 Agenda de hoje:
 ${agendaHoje}
 
-Instruções importantes:
-- Se o cliente quer AGENDAR / MARCAR / RESERVAR → peça data, horário aproximado e nome completo
-- Só crie evento se o usuário fornecer: data + horário + nome (ou algo muito claro)
-- Formato de data/hora aceito: "dia/mês às hh:mm", "amanhã 14h", "próxima quarta 09:30"
-- Sempre confirme antes de criar: "Posso agendar [resumo] para [data/hora]?"
-- Se criar → informe o link do Google Calendar
-- NUNCA invente horários ou prometa disponibilidade sem consultar a agenda
-- Se dúvida → pergunte gentilmente mais detalhes
-- Responda em português do Brasil
+Regras importantes:
+- Se for pergunta sobre AGENDAR / MARCAR / RESERVAR → peça data, horário desejado e nome completo do cliente
+- Só sugira ou confirme agendamento se a agenda permitir (não invente horários livres)
+- Sempre peça confirmação antes de criar: "Posso agendar [resumo] para [data/hora]?"
+- Se for criar → use a função de criação e informe o link do Google Calendar
+- Responda em português brasileiro natural
+- Se não entender ou faltar informação → pergunte gentilmente
+- NUNCA prometa horários sem consultar a agenda real
 `;
 
   try {
@@ -163,33 +165,40 @@ Instruções importantes:
         contents: [
           {
             role: "user",
-            parts: [{ text: systemPrompt + "\n\nMensagem do cliente: " + perguntaUsuario }],
+            parts: [{ text: systemPrompt + "\n\nMensagem do cliente: " + perguntaUsuario.trim() }],
           },
         ],
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 300,
+          maxOutputTokens: 350,
         },
       }),
     });
 
     if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Gemini HTTP ${res.status}: ${err}`);
+      const errBody = await res.text();
+      console.error(`Gemini HTTP ${res.status}: ${errBody}`);
+      throw new Error(`Gemini retornou ${res.status}`);
     }
 
     const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-           "Desculpe, não consegui gerar uma resposta agora.";
+    const resposta = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+    if (!resposta) {
+      throw new Error("Resposta vazia do Gemini");
+    }
+
+    console.log("← Gemini respondeu OK");
+    return resposta;
   } catch (err) {
-    console.error("Gemini erro:", err);
-    return "Opa, tive um probleminha técnico. Pode mandar novamente?";
+    console.error("Gemini erro:", err.message || err);
+    return "Desculpe, estou com um probleminha técnico agora. Pode tentar novamente em alguns instantes? 😅";
   }
 }
 
-// ====================== Webhook principal ======================
+// ====================== Webhook Principal ======================
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Telegram exige resposta rápida
+  res.sendStatus(200); // Resposta rápida obrigatória pro Telegram
 
   const update = req.body;
   if (!update?.message?.chat?.id || !update.message.text) return;
@@ -197,26 +206,26 @@ app.post("/webhook", async (req, res) => {
   const chatId = update.message.chat.id;
   const text = update.message.text.trim();
 
-  // Ignora comandos muito longos / spam
   if (text.length > 1200) {
-    await sendMessage(chatId, "Mensagem muito longa 😅 Pode ser mais breve?");
+    await sendMessage(chatId, "Mensagem muito longa 😅 Pode resumir um pouco?");
     return;
   }
 
   try {
     const agenda = await buscarAgendaHoje();
-    const resposta = await gerarRespostaComGemini(agenda, text, chatId);
+    const resposta = await gerarRespostaGemini(agenda, text);
 
     await sendMessage(chatId, resposta);
   } catch (err) {
     console.error("Erro no fluxo principal:", err);
-    await sendMessage(chatId, "Desculpe, aconteceu algo inesperado. Tente novamente daqui a pouco?");
+    await sendMessage(chatId, "Ocorreu um erro inesperado. Tente novamente mais tarde, por favor.");
   }
 });
 
-// Inicia servidor
+// Inicia o servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Bot rodando na porta ${PORT}`);
-  console.log("Não esqueça de configurar o webhook no Telegram:");
-  console.log(`https://api.telegram.org/bot${TOKEN}/setWebhook?url=https://seu-dominio.com/webhook`);
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`Configure o webhook no Telegram com:`);
+  console.log(`https://api.telegram.org/bot${TOKEN}/setWebhook?url=https://SEU-DOMINIO-RAILWAY/webhook`);
+  console.log("Dica: adicione &secret_token=SEU_SEGREDO para mais segurança depois");
 });
