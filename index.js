@@ -4,70 +4,150 @@ import { google } from "googleapis";
 const app = express();
 app.use(express.json());
 
+const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
 
+// 🔎 Carregando GOOGLE_CONFIG com segurança
+let GOOGLE_CONFIG;
+
+try {
+  GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
+
+  // Corrige quebra de linha da private_key
+  GOOGLE_CONFIG.private_key =
+    GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
+
+  console.log("✅ GOOGLE_CONFIG carregado com sucesso");
+} catch (err) {
+  console.error("❌ Erro ao carregar GOOGLE_CONFIG:", err);
+}
+
+// 🔐 Autenticação Google
 const auth = new google.auth.JWT(
-  GOOGLE_CONFIG.client_email, null, GOOGLE_CONFIG.private_key,
-  ['https://www.googleapis.com/auth/calendar.readonly']
+  GOOGLE_CONFIG.client_email,
+  null,
+  GOOGLE_CONFIG.private_key,
+  ["https://www.googleapis.com/auth/calendar.readonly"]
 );
-const calendar = google.calendar({ version: 'v3', auth });
 
-async function buscarAgenda() {
+const calendar = google.calendar({ version: "v3", auth });
+
+// 📅 Função para buscar agenda de hoje
+async function buscarAgendaHoje() {
   try {
     const agora = new Date();
-    const inicio = new Date(agora.setHours(0, 0, 0, 0)).toISOString();
-    const fim = new Date(agora.setHours(23, 59, 59, 999)).toISOString();
+
+    const inicio = new Date();
+    inicio.setHours(0, 0, 0, 0);
+
+    const fim = new Date();
+    fim.setHours(23, 59, 59, 999);
+
+    console.log("🔎 Buscando eventos entre:", inicio, "e", fim);
 
     const response = await calendar.events.list({
-      calendarId: 'zmphoto@zmphoto.com.br', 
-      timeMin: inicio,
-      timeMax: fim,
+      calendarId: "zmphoto@zmphoto.com.br", // ⚠ confirme se é o ID correto
+      timeMin: inicio.toISOString(),
+      timeMax: fim.toISOString(),
       singleEvents: true,
-      orderBy: 'startTime',
+      orderBy: "startTime",
     });
-    
-    const eventos = response.data.items || [];
-    if (eventos.length === 0) return "A agenda está livre hoje.";
 
-    return "Ocupado: " + eventos.map(e => {
-      const d = new Date(e.start.dateTime || e.start.date);
-      return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-    }).join(', ');
+    const eventos = response.data.items || [];
+
+    console.log("📌 Eventos retornados:", eventos.length);
+
+    if (eventos.length === 0) {
+      return "Agenda está livre hoje.";
+    }
+
+    return eventos
+      .map((e) => {
+        const data = new Date(
+          e.start.dateTime || e.start.date
+        );
+
+        const hora = data.toLocaleTimeString("pt-BR", {
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZone: "America/Sao_Paulo",
+        });
+
+        return `${e.summary} às ${hora}`;
+      })
+      .join("\n");
+
   } catch (err) {
-    return "Erro ao ler a agenda. Verifique as permissões.";
+    console.error("❌ Erro Google Calendar:", err);
+    return "Erro ao acessar a agenda.";
   }
 }
 
+// 🤖 Webhook Telegram
 app.post("/webhook", async (req, res) => {
   const message = req.body.message;
-  if (!message || !message.text) return res.sendStatus(200);
+
+  if (!message || !message.text) {
+    return res.sendStatus(200);
+  }
+
+  const chatId = message.chat.id;
+  const textoUsuario = message.text;
 
   try {
-    const status = await buscarAgenda();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
-    
-    const geminiReq = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: `Você é assistente do Dionizio. Agenda: ${status}. Seja breve.` }] },
-        contents: [{ parts: [{ text: message.text }] }]
-      })
-    });
+    const agendaHoje = await buscarAgendaHoje();
 
-    const data = await geminiReq.json();
-    const resposta = data.candidates?.[0]?.content?.parts[0]?.text || "Como posso ajudar?";
+    const promptSistema = `
+Você é o assistente do Dionizio.
+Agenda de hoje:
+${agendaHoje}
 
-    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: message.chat.id, text: resposta })
-    });
-  } catch (e) { console.error(e); }
+Se perguntarem sobre horários ou agenda, use essas informações.
+Seja curto e educado.
+`;
+
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: promptSistema + "\n\nCliente: " + textoUsuario }],
+            },
+          ],
+        }),
+      }
+    );
+
+    const data = await geminiResponse.json();
+
+    const respostaIA =
+      data.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "Como posso ajudar?";
+
+    await fetch(
+      `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: respostaIA,
+        }),
+      }
+    );
+
+  } catch (err) {
+    console.error("❌ Erro geral:", err);
+  }
+
   res.sendStatus(200);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("🚀 Servidor Ativo"));
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+});
