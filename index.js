@@ -12,18 +12,15 @@ const CALENDAR_ID = "zmphoto@zmphoto.com.br";
 
 // Google Calendar Config
 let GOOGLE_CONFIG;
-
-if (!process.env.GOOGLE_CONFIG) {
-  console.error("❌ GOOGLE_CONFIG não encontrada");
-} else {
-  try {
-    GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG.trim());
-    if (GOOGLE_CONFIG.private_key) {
-      GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
-    }
-  } catch (err) {
-    console.error("❌ Erro ao parsear GOOGLE_CONFIG:", err.message);
+try {
+  if (!process.env.GOOGLE_CONFIG) throw new Error("GOOGLE_CONFIG não definida");
+  GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG.trim());
+  if (GOOGLE_CONFIG.private_key) {
+    GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
   }
+} catch (err) {
+  console.error("❌ Erro fatal no GOOGLE_CONFIG:", err.message);
+  process.exit(1);
 }
 
 const auth = new google.auth.JWT(
@@ -60,7 +57,7 @@ async function buscarAgendaHoje() {
       })
       .join("\n");
   } catch (err) {
-    console.error("ERRO GOOGLE CALENDAR COMPLETO:", err);
+    console.error("ERRO GOOGLE CALENDAR:", err.message, err.stack);
     return "Não consegui consultar a agenda agora.";
   }
 }
@@ -78,42 +75,20 @@ async function sendMessage(chatId, text) {
       if (res.ok) return true;
       console.warn(`Telegram falhou tentativa ${i}: ${await res.text()}`);
       await new Promise(r => setTimeout(r, 800 * i));
-    } catch {}
+    } catch (err) {
+      console.error("Erro sendMessage:", err);
+    }
   }
   return false;
 }
 
-// Gemini - com retry e log melhor
+// Gemini - prompt corrigido sem backticks internos
 async function gerarRespostaGemini(agendaHoje, pergunta) {
-  const MODEL = "gemini-2.5-flash";
+  const MODEL = "gemini-1.5-flash"; // Use 1.5-flash para mais estabilidade (2.5 pode ser instável ou não existir)
   const url = `https://generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
+  
   const systemPrompt = `
 Você é assistente de agendamento do fotógrafo Dionizio.
-
-Esse é o problema.
-
-JavaScript **não aceita essas crases dentro da string**.
-
----
-
-# ✅ Passo 3 — Substituir por esta versão segura
-
-Apague o trecho que adicionamos e coloque **assim**:
-
-```javascript
-- Quando o cliente confirmar o agendamento, responda com:
-
-CONFIRMAR AGENDAMENTO:
-
-{
- "nome": "Nome do cliente",
- "data": "AAAA-MM-DD",
- "hora_inicio": "HH:MM",
- "duracao_minutos": 60,
- "tipo_sessao": "Tipo de sessão"
-}
-
-Coloque exatamente nesse formato para que o sistema possa criar o evento.
 Respostas: educadas, curtas, em português do Brasil.
 Agenda hoje:
 ${agendaHoje}
@@ -125,7 +100,7 @@ Regras importantes:
 - Quando o cliente fornecer TODAS as informações e confirmar que quer agendar → responda com uma mensagem amigável confirmando + no FINAL da resposta coloque EXATAMENTE isso:
 
 CONFIRMAR AGENDAMENTO:
-\`\`\`json
+```json
 {
   "nome": "Nome Sobrenome",
   "data": "2026-02-28",
@@ -134,156 +109,3 @@ CONFIRMAR AGENDAMENTO:
   "tipo_sessao": "Ensaio newborn",
   "telefone": "(opcional)"
 }
-\`\`\`
-
-- Se faltar alguma informação → pergunte gentilmente e NÃO coloque o bloco JSON
-- Mantenha as respostas naturais, o JSON é só para o robô processar
-`;
-  for (let tentativa = 1; tentativa <= 2; tentativa++) {
-    try {
-      console.log(`Gemini tentativa ${tentativa} | ${pergunta.substring(0, 60)}...`);
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: systemPrompt + "\nCliente: " + pergunta.trim() }] }],
-          generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.text();
-        console.error(`Gemini HTTP ${res.status}: ${err}`);
-        if (res.status === 429) return "Muitos pedidos agora. Tente novamente em 1 minuto.";
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      const texto = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (texto) {
-        console.log("Gemini OK");
-        return texto;
-      }
-      console.warn("Gemini retornou vazio");
-    } catch (err) {
-      console.error("Gemini erro:", err.message);
-    }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-  return "Desculpe, não consegui processar agora. Pode repetir a pergunta?";
-}
-
-// Função para criar evento
-async function criarEventoGoogleCalendar(nome, data, horaInicio, duracaoMinutos, tipoSessao, telefone = "") {
-  console.log("Tentando criar evento com dados:", { nome, data, horaInicio, duracaoMinutos, tipoSessao });
-  try {
-    // Montar data/hora em ISO com timezone America/Sao_Paulo
-    const [ano, mes, dia] = data.split("-");
-    const [hora, minuto] = horaInicio.split(":");
-    
-    const startDate = new Date(Date.UTC(ano, mes-1, dia, hora, minuto, 0));
-    const endDate = new Date(startDate.getTime() + duracaoMinutos * 60 * 1000);
-
-    const event = {
-      summary: `${tipoSessao} - ${nome}`,
-      description: `Cliente: ${nome}\nTelefone: ${telefone || "não informado"}`,
-      start: {
-        dateTime: startDate.toISOString(),
-        timeZone: "America/Sao_Paulo",
-      },
-      end: {
-        dateTime: endDate.toISOString(),
-        timeZone: "America/Sao_Paulo",
-      },
-      // Opcional: adicionar lembretes
-      reminders: {
-        useDefault: false,
-        overrides: [
-          { method: "popup", minutes: 1440 }, // 1 dia antes
-          { method: "popup", minutes: 60 },   // 1 hora antes
-        ],
-      },
-    };
-
-    console.log("Chamando calendar.events.insert com calendarId:", CALENDAR_ID);
-    const response = await calendar.events.insert({
-      calendarId: CALENDAR_ID,
-      resource: event,
-      sendUpdates: "none", // "none" para não enviar emails indesejados durante testes
-    });
-    
-    console.log("SUCESSO! Evento criado - ID:", response.data.id, "Link:", response.data.htmlLink);
-    return {
-      success: true,
-      link: response.data.htmlLink,
-      id: response.data.id,
-    };
-  } catch (err) {
-    console.error("ERRO AO CRIAR EVENTO:", {
-      message: err.message,
-      code: err.code,
-      errors: err.errors,
-      details: err.details || err.result?.error
-    });
-    return { success: false, error: err?.message || "Erro desconhecido" };
-  }
-}
-
-// Webhook
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
-  const update = req.body;
-  if (!update?.message?.chat?.id || !update.message.text) return;
-  const chatId = update.message.chat.id;
-  const text = update.message.text.trim();
-  if (text.length > 800) {
-    await sendMessage(chatId, "Mensagem longa demais 😅 Pode ser mais curta?");
-    return;
-  }
-  try {
-    const agenda = await buscarAgendaHoje();
-    let resposta = await gerarRespostaGemini(agenda, text);
-
-    // ────────────────────────────────────────────────
-    // Tenta extrair o bloco JSON de confirmação
-    // ────────────────────────────────────────────────
-    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/);
-    if (jsonMatch && jsonMatch[1]) {
-      console.log("Bloco JSON detectado no Gemini:", jsonMatch[1]);
-      try {
-        const dados = JSON.parse(jsonMatch[1].trim());
-        console.log("Dados parseados:", dados);
-
-        if (dados.nome && dados.data && dados.hora_inicio && dados.duracao_minutos) {
-          const resultado = await criarEventoGoogleCalendar(
-            dados.nome,
-            dados.data,
-            dados.hora_inicio,
-            dados.duracao_minutos,
-            dados.tipo_sessao || "Sessão",
-            dados.telefone
-          );
-
-          if (resultado.success) {
-            resposta = `Agendamento confirmado com sucesso! 🎉\n\n${dados.nome} - ${dados.tipo_sessao || "Sessão"}\nData: ${dados.data} às ${dados.hora_inicio}\n\nObrigado pela confiança!`;
-            // Opcional: enviar o link do evento
-            // resposta += `\nLink: ${resultado.link}`;
-          } else {
-            resposta = `Ops... deu algum problema ao salvar na agenda: ${resultado.error}\n\nPode tentar novamente ou me chamar no WhatsApp?`;
-          }
-        }
-      } catch (e) {
-        console.error("Falha ao parsear JSON do Gemini:", e.message, "Conteúdo bruto:", jsonMatch[1]);
-        // continua com a resposta original se der erro no parse
-      }
-    }
-
-    await sendMessage(chatId, resposta);
-  } catch (err) {
-    console.error("Erro principal:", err);
-    await sendMessage(chatId, "Problema técnico. Tente novamente daqui a pouco.");
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Rodando na porta ${PORT}`);
-  console.log(`Webhook: https://api.telegram.org/bot${TOKEN}/setWebhook?url=${process.env.RAILWAY_PUBLIC_DOMAIN || "SEU-DOMINIO"}/webhook`);
-});
