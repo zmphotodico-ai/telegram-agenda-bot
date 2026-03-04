@@ -12,12 +12,18 @@ const CALENDAR_ID = "zmphoto@zmphoto.com.br";
 
 // Google Calendar Config
 let GOOGLE_CONFIG;
-try {
-  GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
-  GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
-} catch (err) {
-  console.error("❌ GOOGLE_CONFIG inválido:", err.message);
-  process.exit(1);
+
+if (!process.env.GOOGLE_CONFIG) {
+  console.error("❌ GOOGLE_CONFIG não encontrada");
+} else {
+  try {
+    GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG.trim());
+    if (GOOGLE_CONFIG.private_key) {
+      GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
+    }
+  } catch (err) {
+    console.error("❌ Erro ao parsear GOOGLE_CONFIG:", err.message);
+  }
 }
 
 const auth = new google.auth.JWT(
