@@ -89,17 +89,31 @@ async function gerarRespostaGemini(agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
   const systemPrompt = `
 Você é assistente de agendamento do fotógrafo Dionizio.
-- Quando o cliente confirmar o agendamento, você DEVE obrigatoriamente gerar o bloco:
+
+Esse é o problema.
+
+JavaScript **não aceita essas crases dentro da string**.
+
+---
+
+# ✅ Passo 3 — Substituir por esta versão segura
+
+Apague o trecho que adicionamos e coloque **assim**:
+
+```javascript
+- Quando o cliente confirmar o agendamento, responda com:
 
 CONFIRMAR AGENDAMENTO:
-```json
+
 {
- "nome": "...",
- "data": "...",
- "hora_inicio": "...",
+ "nome": "Nome do cliente",
+ "data": "AAAA-MM-DD",
+ "hora_inicio": "HH:MM",
  "duracao_minutos": 60,
- "tipo_sessao": "..."
+ "tipo_sessao": "Tipo de sessão"
 }
+
+Coloque exatamente nesse formato para que o sistema possa criar o evento.
 Respostas: educadas, curtas, em português do Brasil.
 Agenda hoje:
 ${agendaHoje}
