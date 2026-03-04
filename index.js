@@ -60,7 +60,7 @@ async function buscarAgendaHoje() {
       })
       .join("\n");
   } catch (err) {
-    console.error("Erro agenda:", err?.message || err);
+    console.error("ERRO GOOGLE CALENDAR COMPLETO:", err);
     return "Não consegui consultar a agenda agora.";
   }
 }
