@@ -89,6 +89,17 @@ async function gerarRespostaGemini(agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1/models/${MODEL}:generateContent?key=${GEMINI_KEY}`;
   const systemPrompt = `
 Você é assistente de agendamento do fotógrafo Dionizio.
+- Quando o cliente confirmar o agendamento, você DEVE obrigatoriamente gerar o bloco:
+
+CONFIRMAR AGENDAMENTO:
+```json
+{
+ "nome": "...",
+ "data": "...",
+ "hora_inicio": "...",
+ "duracao_minutos": 60,
+ "tipo_sessao": "..."
+}
 Respostas: educadas, curtas, em português do Brasil.
 Agenda hoje:
 ${agendaHoje}
