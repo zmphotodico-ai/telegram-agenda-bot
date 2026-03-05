@@ -15,7 +15,7 @@ try {
   GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
   GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
 } catch (err) {
-  console.error("❌ Erro no GOOGLE_CONFIG. Verifique as variáveis no Railway.");
+  console.error("❌ Erro no GOOGLE_CONFIG.");
   process.exit(1);
 }
 
@@ -25,7 +25,7 @@ const auth = new google.auth.JWT(
 );
 const calendar = google.calendar({ version: "v3", auth });
 
-// 2. Buscar Agenda
+// 2. Buscar Agenda Hoje
 async function buscarAgendaHoje() {
   try {
     const inicio = new Date(); inicio.setHours(0, 0, 0, 0);
@@ -45,7 +45,7 @@ async function buscarAgendaHoje() {
       return `• Ocupado às ${hora} (${e.summary || "Ensaio"})`;
     }).join("\n");
     
-    return `Horários ocupados:\n${ocupados}\n\nATENÇÃO: Qualquer horário comercial que não estiver listado acima está LIVRE.`;
+    return `Horários ocupados:\n${ocupados}\n\nATENÇÃO: Qualquer horário comercial não listado acima está LIVRE.`;
   } catch (err) {
     return "Não consegui consultar a agenda agora.";
   }
@@ -70,12 +70,15 @@ async function sendMessage(chatId, text) {
 // 4. Criar Evento no Google Calendar
 async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao) {
   try {
+    // Ex: "2026-03-10" e "12:00"
     const [ano, mes, dia] = dataStr.split("-");
     const [hora, minuto] = horaInicio.split(":");
     
-    // Configura o fuso horário de São Paulo corretamente
     const startDate = new Date(`${ano}-${mes}-${dia}T${hora}:${minuto}:00-03:00`);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60 * 1000);
+
+    // Proteção contra data inválida gerada pela IA
+    if (isNaN(startDate.getTime())) throw new Error("Data inválida recebida");
 
     const event = {
       summary: `${tipoSessao} - ${nome}`,
@@ -91,50 +94,62 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
   }
 }
 
-// 5. Inteligência Artificial
+// 5. Inteligência Artificial (Com Tratamento de Erros)
 async function gerarRespostaGemini(agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
   
-  // O prompt agora está totalmente limpo, sem conversas extras
-  const systemPrompt = `Você é o assistente de agendamento do fotógrafo Dionizio.
-Responda de forma curta, educada e direta.
-
-AGENDA DE HOJE:
-${agendaHoje}
-
-REGRAS OBRIGATÓRIAS:
-1. Responda dúvidas sobre horários baseando-se na agenda acima.
-2. Para agendar, peça: Data (AAAA-MM-DD), Hora exata, Nome e Tipo de Sessão.
-3. QUANDO O CLIENTE CONFIRMAR ESTES 4 DADOS, adicione OBRIGATORIAMENTE o bloco de código abaixo no final da sua resposta para o sistema processar.
-
-\`\`\`json
-{
-  "nome": "Nome do Cliente",
-  "data": "AAAA-MM-DD",
-  "hora_inicio": "HH:MM",
-  "duracao_minutos": 60,
-  "tipo_sessao": "Tipo do Ensaio"
-}
-\`\`\``;
+  // Agora a IA sabe exatamente o dia de hoje, evitando errar o ano/mês
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  
+  const systemPrompt = `Você é o assistente de agendamento do fotógrafo Dionizio. Responda de forma educada e bem curta.
+  DATA DE HOJE: ${hoje}. Use isso como base para o ano e o mês se o cliente pedir um dia solto.
+  
+  AGENDA DE HOJE:
+  ${agendaHoje}
+  
+  REGRAS:
+  1. Para agendar, peça todos os dados: Data (AAAA-MM-DD), Hora exata, Nome e Tipo de Sessão.
+  2. QUANDO O CLIENTE CONFIRMAR OS DADOS, você deve AVISAR que está marcando o ensaio e inserir NO FINAL da resposta exatamente este bloco de código (substituindo pelos dados reais):
+  
+  \`\`\`json
+  {
+    "nome": "Nome do Cliente",
+    "data": "AAAA-MM-DD",
+    "hora_inicio": "HH:MM",
+    "duracao_minutos": 60,
+    "tipo_sessao": "Tipo do Ensaio"
+  }
+  \`\`\``;
 
   try {
     const res = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: systemPrompt + "\n\nCliente diz: " + pergunta }] }],
-        generationConfig: { temperature: 0.2 } // Baixa temperatura para ele não errar o formato do JSON
+        systemInstruction: { parts: [{ text: systemPrompt }] }, // Instrução nativa! Mais estável.
+        contents: [{ role: "user", parts: [{ text: pergunta }] }],
+        generationConfig: { temperature: 0.1 } // Temperatura quase zero (sem invenções)
       }),
     });
+    
     const data = await res.json();
+    
+    // O Detetive de Erros: Descobrindo por que o Google barrou a gente
+    if (data.error) {
+       console.error("Erro Gemini API:", data.error);
+       if (data.error.code === 429) return "Estou recebendo muitas mensagens juntas! 😅 Pode aguardar uns 10 segundos e tentar de novo?";
+       return "Opa, deu uma falha na minha inteligência. Pode tentar escrever de outra forma?";
+    }
+
     return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
   } catch (err) {
-    return "Estou com instabilidade, me chame em um minuto.";
+    console.error("Falha de rede Gemini:", err);
+    return "Minha conexão oscilou, me chame novamente em 1 minuto.";
   }
 }
 
-// 6. Webhook
+// 6. Webhook e "Pulo do Gato" da Marcação
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
+  res.sendStatus(200); // Não deixa o Telegram travar
   
   const msg = req.body?.message;
   if (!msg?.text || !msg?.chat?.id) return;
@@ -145,24 +160,30 @@ app.post("/webhook", async (req, res) => {
     const agenda = await buscarAgendaHoje();
     let resposta = await gerarRespostaGemini(agenda, msg.text);
 
-    // O "Detetive" que procura a ordem de agendamento na resposta da IA
-    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/);
+    // Detetive aprimorado: pega o JSON mesmo se a IA esquecer de escrever "json" na caixinha
+    const jsonMatch = resposta.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     
     if (jsonMatch && jsonMatch[1]) {
       try {
         const dados = JSON.parse(jsonMatch[1].trim());
         
-        // Removemos o bloco JSON de código da resposta para o cliente não ver
-        resposta = resposta.replace(/```json\s*([\s\S]*?)\s*```/, "").trim();
-        await sendMessage(chatId, "⏳ Entendido! Estou registrando seu horário na agenda do Dionizio...");
+        // Retiramos a parte feia do código da resposta pro cliente não ver
+        resposta = resposta.replace(/```(?:json)?\s*([\s\S]*?)\s*```/, "").trim();
+        
+        // Se a resposta ficar vazia, não deixamos dar erro no Telegram
+        if(resposta === "") { resposta = "⏳ Entendido! Aguarde um instante..."; }
+        
+        await sendMessage(chatId, resposta);
+        await sendMessage(chatId, "Salvando na agenda do Dionizio... 📅");
 
-        const resultado = await criarEventoGoogleCalendar(dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos, dados.tipo_sessao);
+        const resultado = await criarEventoGoogleCalendar(dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos || 60, dados.tipo_sessao);
 
         if (resultado.success) {
-          resposta += `\n\n✅ Agendamento salvo com sucesso para o dia ${dados.data} às ${dados.hora_inicio}!`;
+          await sendMessage(chatId, `✅ Tudo certo, ${dados.nome}! Seu agendamento para o dia ${dados.data} às ${dados.hora_inicio} foi marcado com sucesso!`);
         } else {
-          resposta = "❌ Tive um problema técnico ao conectar com a agenda. Pode tentar novamente mais tarde?";
+          await sendMessage(chatId, "❌ Ops... tive um problema ao conectar com a agenda do Google. A data pode estar em um formato que não entendi. Pode tentar de novo?");
         }
+        return; // Encerra aqui pois já respondemos
       } catch (e) {
         console.error("Erro ao ler JSON da IA:", e);
       }
@@ -170,7 +191,8 @@ app.post("/webhook", async (req, res) => {
 
     await sendMessage(chatId, resposta);
   } catch (err) {
-    await sendMessage(chatId, "Problema técnico. Tente novamente.");
+    console.error("Erro Fluxo:", err);
+    await sendMessage(chatId, "Tive um probleminha técnico. Tente novamente daqui a pouco.");
   }
 });
 
