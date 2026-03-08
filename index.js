@@ -28,6 +28,121 @@ const auth = new google.auth.JWT(
   ["https://www.googleapis.com/auth/calendar"]
 );
 const calendar = google.calendar({ version: "v3", auth });
+const conversas = new Map();
+const PALAVRAS_CONFIRMACAO = ["tudo certo", "confirmo", "sim", "confirmado", "pode agendar", "fechado", "ok"];
+
+function obterConversa(chatId) {
+  if (!conversas.has(chatId)) {
+    conversas.set(chatId, {
+      mensagens: [],
+      dados: {
+        nome: null,
+        data: null,
+        hora_inicio: null,
+        tipo: null,
+        duracao_minutos: 60
+      },
+      eventoCriado: false
+    });
+  }
+  return conversas.get(chatId);
+}
+
+function normalizarTipo(tipo) {
+  if (!tipo) return null;
+  return tipo.replace(/^tipo( de sess[aã]o)?:?/i, "").trim();
+}
+
+function extrairNome(texto) {
+  const match = texto.match(/(?:meu nome [ée]|nome(?: completo)?[:\-]?|sou)\s+([A-Za-zÀ-ÖØ-öø-ÿ'\-]+(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ'\-]+)+)/i);
+  return match ? match[1].trim() : null;
+}
+
+function extrairCamposDaConversa(texto) {
+  const dados = {};
+
+  const dataMatch = texto.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  if (dataMatch) dados.data = dataMatch[1];
+
+  const horaMatch = texto.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (horaMatch) dados.hora_inicio = `${horaMatch[1].padStart(2, "0")}:${horaMatch[2]}`;
+
+  const nome = extrairNome(texto);
+  if (nome) dados.nome = nome;
+
+  const tipoExplito = texto.match(/(?:tipo(?: de sess[aã]o)?[:\-]?|sess[aã]o[:\-]?|evento[:\-]?|ensaio[:\-]?)\s*([A-Za-zÀ-ÖØ-öø-ÿ0-9\s'\-]{3,})/i);
+  if (tipoExplito) {
+    dados.tipo = normalizarTipo(tipoExplito[1]);
+  } else {
+    const tipoKeywords = ["ensaio fotográfico", "ensaio", "evento", "casamento", "aniversário", "aniversario", "corporativo", "formatura", "batizado"];
+    const keyword = tipoKeywords.find(k => texto.toLowerCase().includes(k));
+    if (keyword) dados.tipo = keyword;
+  }
+
+  return dados;
+}
+
+function usuarioConfirmou(texto) {
+  const normalizado = texto.toLowerCase();
+  return PALAVRAS_CONFIRMACAO.some(palavra => normalizado.includes(palavra));
+}
+
+function temCamposObrigatorios(dados) {
+  return Boolean(dados.nome && dados.data && dados.hora_inicio && dados.tipo);
+}
+
+function atualizarDadosConversa(conversa, novosDados = {}) {
+  if (!novosDados) return conversa.dados;
+  const mapa = {
+    nome: novosDados.nome,
+    data: novosDados.data,
+    hora_inicio: novosDados.hora_inicio,
+    tipo: novosDados.tipo || novosDados.tipo_sessao,
+    duracao_minutos: novosDados.duracao_minutos
+  };
+
+  for (const [chave, valor] of Object.entries(mapa)) {
+    if (valor === undefined || valor === null) continue;
+    const valorLimpo = String(valor).trim();
+    if (valorLimpo !== "") {
+      conversa.dados[chave] = chave === "tipo" ? normalizarTipo(valorLimpo) : valorLimpo;
+    }
+  }
+
+  const extraidoDoHistorico = extrairCamposDaConversa(conversa.mensagens.join("\n"));
+  for (const [chave, valor] of Object.entries(extraidoDoHistorico)) {
+    if (!conversa.dados[chave] && valor) {
+      conversa.dados[chave] = chave === "tipo" ? normalizarTipo(valor) : valor;
+    }
+  }
+
+  return conversa.dados;
+}
+
+async function tentarCriarEventoAutomatico(chatId, conversa) {
+  if (conversa.eventoCriado || !temCamposObrigatorios(conversa.dados)) {
+    return { tentou: false };
+  }
+
+  conversa.eventoCriado = true;
+  await sendMessage(chatId, "Salvando na agenda... 📅");
+  const resultado = await criarEventoGoogleCalendar(
+    conversa.dados.nome,
+    conversa.dados.data,
+    conversa.dados.hora_inicio,
+    conversa.dados.duracao_minutos,
+    conversa.dados.tipo
+  );
+
+  if (resultado.success) {
+    await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${conversa.dados.data} às ${conversa.dados.hora_inicio}!`);
+  } else {
+    conversa.eventoCriado = false;
+    await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message || "Erro desconhecido"}.`);
+  }
+
+  return { tentou: true, sucesso: resultado.success };
+}
 
 // =============================
 // BUSCAR AGENDA HOJE
@@ -198,41 +313,46 @@ app.post("/webhook", async (req, res) => {
   if (!msg?.text) return;
   const chatId = msg.chat.id;
   const texto = msg.text;
+  const conversa = obterConversa(chatId);
+  conversa.mensagens.push(`Cliente: ${texto}`);
+
   try {
+    atualizarDadosConversa(conversa, extrairCamposDaConversa(texto));
     const agenda = await buscarAgendaHoje();
     let resposta = await gerarRespostaGemini(agenda, texto);
+    conversa.mensagens.push(`Assistente: ${resposta}`);
 
-    // Procura o comando secreto de agendamento (regex mais robusta)
-    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); // Ignora case e captura melhor
+    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i);
     if (jsonMatch) {
       try {
         const dados = JSON.parse(jsonMatch[1]);
+        atualizarDadosConversa(conversa, dados);
 
-        // Remove o bloco JSON da resposta que vai pro cliente
         resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
         if (resposta !== "") {
           await sendMessage(chatId, resposta);
         }
-        await sendMessage(chatId, "Salvando na agenda... 📅");
-        const resultado = await criarEventoGoogleCalendar(
-          dados.nome,
-          dados.data,
-          dados.hora_inicio,
-          dados.duracao_minutos,
-          dados.tipo_sessao
-        );
-        if (resultado.success) {
-          await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
-        } else {
-          await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message || "Erro desconhecido"}.`);
-        }
-        return; // Encerra para não mandar duplicado
+
+        const resultadoAuto = await tentarCriarEventoAutomatico(chatId, conversa);
+        if (resultadoAuto.tentou) return;
       } catch (jsonError) {
         console.error("Erro ao ler os dados do Gemini:", jsonError);
-        // Ignora o bloco e responde o texto normal
       }
     }
-    await sendMessage(chatId, resposta);
+
+    const houveConfirmacao = usuarioConfirmou(texto);
+    const dadosExtraidos = extrairCamposDaConversa(`${texto}\n${resposta}`);
+    atualizarDadosConversa(conversa, dadosExtraidos);
+
+    if (resposta !== "") {
+      await sendMessage(chatId, resposta);
+    }
+
+    const prontoParaAgendar = temCamposObrigatorios(conversa.dados);
+    if (houveConfirmacao || prontoParaAgendar) {
+      const resultadoAuto = await tentarCriarEventoAutomatico(chatId, conversa);
+      if (resultadoAuto.tentou) return;
+    }
   } catch (err) {
     console.error("Erro geral:", err);
     await sendMessage(chatId, "Tive um erro interno. Pode tentar de novo?");
