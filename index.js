@@ -28,6 +28,68 @@ const auth = new google.auth.JWT(
   ["https://www.googleapis.com/auth/calendar"]
 );
 const calendar = google.calendar({ version: "v3", auth });
+const estadoConversas = new Map();
+
+function obterEstadoConversa(chatId) {
+  if (!estadoConversas.has(chatId)) {
+    estadoConversas.set(chatId, {
+      booking: {
+        nome: null,
+        data: null,
+        hora_inicio: null,
+        tipo_sessao: null,
+        duracao_minutos: 60
+      },
+      fluxoTravado: false
+    });
+  }
+  return estadoConversas.get(chatId);
+}
+
+function resetarEstadoConversa(estado) {
+  estado.booking = {
+    nome: null,
+    data: null,
+    hora_inicio: null,
+    tipo_sessao: null,
+    duracao_minutos: 60
+  };
+  estado.fluxoTravado = false;
+}
+
+function extrairJsonDaResposta(texto) {
+  const blocos = [];
+  const blocoJson = texto.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (blocoJson) blocos.push(blocoJson[1]);
+
+  for (const bloco of blocos) {
+    try {
+      return JSON.parse(bloco);
+    } catch (e) {}
+  }
+  return null;
+}
+
+function atualizarBooking(estado, dados = {}) {
+  if (typeof dados.nome === "string" && dados.nome.trim()) estado.booking.nome = dados.nome.trim();
+  if (typeof dados.data === "string" && dados.data.trim()) estado.booking.data = dados.data.trim();
+  if (typeof dados.hora_inicio === "string" && dados.hora_inicio.trim()) estado.booking.hora_inicio = dados.hora_inicio.trim();
+
+  const tipo = dados.tipo_sessao || dados.tipo;
+  if (typeof tipo === "string" && tipo.trim()) estado.booking.tipo_sessao = tipo.trim();
+
+  if (dados.duracao_minutos != null && !Number.isNaN(Number(dados.duracao_minutos))) {
+    estado.booking.duracao_minutos = Number(dados.duracao_minutos);
+  }
+
+  if (estado.booking.nome && estado.booking.data && estado.booking.hora_inicio) {
+    estado.fluxoTravado = true;
+  }
+}
+
+function limparBlocoJson(texto) {
+  return texto.replace(/```json[\s\S]*?```/i, "").trim();
+}
 
 // =============================
 // BUSCAR AGENDA HOJE
@@ -138,24 +200,63 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
   }
 }
 
+async function processarAgendamentoTravado(chatId, estado) {
+  await sendMessage(chatId, "Perfeito! Já tenho seus dados principais. Vou verificar disponibilidade agora. 📅");
+  const disponivel = await verificarDisponibilidade(
+    estado.booking.data,
+    estado.booking.hora_inicio,
+    estado.booking.duracao_minutos || 60
+  );
+
+  if (!disponivel) {
+    estado.booking.hora_inicio = null;
+    estado.fluxoTravado = false;
+    await sendMessage(chatId, "❌ Esse horário já está ocupado. Me diga outro horário para eu tentar novamente.");
+    return true;
+  }
+
+  const resultado = await criarEventoGoogleCalendar(
+    estado.booking.nome,
+    estado.booking.data,
+    estado.booking.hora_inicio,
+    estado.booking.duracao_minutos || 60,
+    estado.booking.tipo_sessao || "Sessão fotográfica"
+  );
+
+  if (resultado.success) {
+    await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${estado.booking.data} às ${estado.booking.hora_inicio}!`);
+    resetarEstadoConversa(estado);
+  } else {
+    await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message || "Erro desconhecido"}.`);
+  }
+  return true;
+}
+
 // =============================
 // GEMINI IA
 // =============================
-async function gerarRespostaGemini(agendaHoje, pergunta) {
+async function gerarRespostaGemini(agendaHoje, pergunta, booking = {}) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   const hoje = new Date().toLocaleDateString("pt-BR");
+  const camposConhecidos = {
+    nome: booking.nome || "",
+    data: booking.data || "",
+    hora_inicio: booking.hora_inicio || "",
+    tipo_sessao: booking.tipo_sessao || "",
+    duracao_minutos: booking.duracao_minutos || 60
+  };
+
   const prompt = `Você é o assistente de agendamento do fotógrafo Dionizio.
 Hoje é: ${hoje}
 Agenda atual:
 ${agendaHoje}
+Campos já coletados para este cliente:
+${JSON.stringify(camposConhecidos)}
 REGRAS
 - Sempre responda de forma amigável e profissional.
-- Para agendar, confirme todos os detalhes com o cliente antes de prosseguir.
-- Peça explicitamente:
-  1. data (AAAA-MM-DD)
-  2. hora inicial (HH:MM)
-  3. nome completo
-  4. tipo de sessão (ex: ensaio fotográfico, evento)
+- NUNCA reinicie o fluxo pedindo novamente campos que já estão preenchidos em "Campos já coletados".
+- Só pergunte os campos que estiverem vazios.
+- Se nome, data e hora_inicio já estiverem preenchidos, NÃO peça nada de novo e prepare o JSON final imediatamente.
 - Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que está tudo correto.
 - Nunca invente dados; use apenas o que o cliente forneceu.
 - No FINAL da mensagem, se for para agendar, escreva EXATAMENTE o bloco abaixo com os dados preenchidos (sem texto extra depois):
@@ -198,35 +299,33 @@ app.post("/webhook", async (req, res) => {
   if (!msg?.text) return;
   const chatId = msg.chat.id;
   const texto = msg.text;
+  const estado = obterEstadoConversa(chatId);
   try {
+    if (estado.fluxoTravado) {
+      await processarAgendamentoTravado(chatId, estado);
+      return;
+    }
+
     const agenda = await buscarAgendaHoje();
-    let resposta = await gerarRespostaGemini(agenda, texto);
+    let resposta = await gerarRespostaGemini(agenda, texto, estado.booking);
 
     // Procura o comando secreto de agendamento (regex mais robusta)
-    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); // Ignora case e captura melhor
-    if (jsonMatch) {
+    const dadosExtraidos = extrairJsonDaResposta(resposta);
+    if (dadosExtraidos) {
       try {
-        const dados = JSON.parse(jsonMatch[1]);
+        atualizarBooking(estado, dadosExtraidos);
 
         // Remove o bloco JSON da resposta que vai pro cliente
-        resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
+        resposta = limparBlocoJson(resposta);
         if (resposta !== "") {
           await sendMessage(chatId, resposta);
         }
-        await sendMessage(chatId, "Salvando na agenda... 📅");
-        const resultado = await criarEventoGoogleCalendar(
-          dados.nome,
-          dados.data,
-          dados.hora_inicio,
-          dados.duracao_minutos,
-          dados.tipo_sessao
-        );
-        if (resultado.success) {
-          await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
-        } else {
-          await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message || "Erro desconhecido"}.`);
+
+        if (estado.fluxoTravado) {
+          await sendMessage(chatId, "Dados recebidos. Vou verificar disponibilidade e salvar seu agendamento. 📅");
+          await processarAgendamentoTravado(chatId, estado);
+          return;
         }
-        return; // Encerra para não mandar duplicado
       } catch (jsonError) {
         console.error("Erro ao ler os dados do Gemini:", jsonError);
         // Ignora o bloco e responde o texto normal
