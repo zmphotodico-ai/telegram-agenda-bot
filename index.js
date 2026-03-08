@@ -142,7 +142,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 // GEMINI IA
 // =============================
 async function gerarRespostaGemini(agendaHoje, pergunta) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`; // Atualizado para v1
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   const hoje = new Date().toLocaleDateString("pt-BR");
   const prompt = `Você é o assistente de agendamento do fotógrafo Dionizio.
 Hoje é: ${hoje}
