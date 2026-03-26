@@ -7,7 +7,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const CALENDAR_ID = "zmphoto@zmphoto.com.br";
+const CALENDAR_ID = "const CALENDAR_ID = "alugueldestudiofotografico@gmail.com";
 
 // =============================
 // GOOGLE CALENDAR CONFIG
