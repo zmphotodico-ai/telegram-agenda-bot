@@ -87,8 +87,7 @@ async function sendMessage(chatId, text) {
 async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
   try {
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
-    startDate.setMinutes(startDate.getMinutes() - 3 * 60); // Ajuste para fuso -03:00, mas usando timeZone no Google
-    const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
+const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
     const res = await calendar.events.list({
       calendarId: CALENDAR_ID,
       timeMin: startDate.toISOString(),
