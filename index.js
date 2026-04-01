@@ -9,8 +9,10 @@ const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
-// ✅ E-mail correto do seu calendário
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
+
+// ✅ MEMÓRIA DO BOT (Para ele não esquecer o que vocês estavam falando)
+const memoriaConversas = {};
 
 // =============================
 // GOOGLE CALENDAR CONFIG
@@ -61,12 +63,7 @@ async function buscarAgendaHoje() {
 
     const lista = eventos.map(ev => {
       const start = new Date(ev.start.dateTime || ev.start.date);
-      const hora = start.toLocaleTimeString("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: "America/Sao_Paulo"
-      });
-
+      const hora = start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
       return `• Ocupado às ${hora} (${ev.summary})`;
     }).join("\n");
 
@@ -83,7 +80,6 @@ async function buscarAgendaHoje() {
 // =============================
 async function sendMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
-
   for (let i = 1; i <= 3; i++) {
     try {
       const res = await fetch(url, {
@@ -91,13 +87,10 @@ async function sendMessage(chatId, text) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text })
       });
-
       if (res.ok) return;
-
       await new Promise(r => setTimeout(r, 800));
-
     } catch (e) {
-      console.error("⚠️ Falha ao enviar mensagem (tentativa " + i + ")");
+      console.error("⚠️ Falha ao enviar mensagem");
     }
   }
 }
@@ -139,7 +132,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
     const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos);
 
     if (!disponivel) {
-      return { success: false, message: "Horário indisponível (sobreposição detectada)" };
+      return { success: false, message: "Horário indisponível na agenda do fotógrafo." };
     }
 
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
@@ -151,13 +144,9 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
     };
 
-    const response = await calendar.events.insert({
-      calendarId: CALENDAR_ID,
-      resource: event
-    });
+    const response = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: event });
 
     console.log("✅ Evento criado com sucesso no Google Calendar!");
-
     return { success: true, link: response.data.htmlLink };
 
   } catch (err) {
@@ -167,12 +156,12 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI IA
+// GEMINI COM MEMÓRIA
 // =============================
-async function gerarRespostaGemini(agendaHoje, pergunta) {
+async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-  
   const hoje = new Date().toLocaleDateString("pt-BR");
+  
   const prompt = `Você é o assistente de agendamento do fotógrafo Dionizio.
 Hoje é: ${hoje}
 Agenda atual:
@@ -185,10 +174,9 @@ REGRAS:
   1. data (AAAA-MM-DD)
   2. hora inicial (HH:MM)
   3. nome completo
-  4. tipo de sessão (ex: ensaio fotográfico, evento)
-- Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que está tudo correto.
-- Nunca invente dados; use apenas o que o cliente forneceu.
-- No FINAL da mensagem, se for para agendar, escreva EXATAMENTE o bloco abaixo com os dados preenchidos (sem texto extra depois):
+  4. tipo de sessão
+- Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que a pessoa disse que aprova/confirma/pode prosseguir.
+- No FINAL da mensagem, se for para confirmar o agendamento, escreva EXATAMENTE o bloco abaixo com os dados preenchidos:
 \`\`\`json
 {
  "nome":"Nome Cliente",
@@ -199,12 +187,29 @@ REGRAS:
 }
 \`\`\``;
 
+  // ✅ 1. Inicia a memória para o cliente, se não existir
+  if (!memoriaConversas[chatId]) {
+    memoriaConversas[chatId] = [];
+  }
+
+  // ✅ 2. Salva a nova mensagem do cliente na memória
+  memoriaConversas[chatId].push(`Cliente: ${pergunta}`);
+
+  // Mantém apenas as últimas 8 mensagens para não bugar a IA
+  if (memoriaConversas[chatId].length > 8) {
+    memoriaConversas[chatId].shift();
+  }
+
+  // ✅ 3. Junta todo o histórico num texto só
+  const historicoTexto = memoriaConversas[chatId].join("\n");
+  const promptCompleto = `${prompt}\n\n[HISTÓRICO DA CONVERSA]\n${historicoTexto}\nAssistente:`;
+
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt + "\nCliente: " + pergunta }] }],
+        contents: [{ role: "user", parts: [{ text: promptCompleto }] }],
         generationConfig: { temperature: 0.1 }
       })
     });
@@ -212,11 +217,20 @@ REGRAS:
     const data = await res.json();
     
     if (data.error) {
+      memoriaConversas[chatId].pop(); // Remove a última mensagem falha
       console.error("❌ Erro da API Gemini:", data.error.message);
       return "Tive um problema na minha inteligência agora. Pode repetir?";
     }
 
-    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
+    const respostaBot = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
+
+    // ✅ 4. Salva a resposta do bot na memória (limpando códigos JSON ocultos)
+    const respostaLimpaParaMemoria = respostaBot.replace(/```json[\s\S]*?```/i, "").trim();
+    if (respostaLimpaParaMemoria !== "") {
+      memoriaConversas[chatId].push(`Assistente: ${respostaLimpaParaMemoria}`);
+    }
+
+    return respostaBot;
 
   } catch (err) {
     console.error("❌ Erro de conexão com Gemini:", err.message);
@@ -238,16 +252,14 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const agenda = await buscarAgendaHoje();
-    let resposta = await gerarRespostaGemini(agenda, texto);
+    // ✅ Passamos o chatId para a função saber qual memória buscar
+    let resposta = await gerarRespostaGemini(chatId, agenda, texto);
 
-    // Procura o comando secreto de agendamento gerado pelo Gemini
     const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); 
     
     if (jsonMatch) {
       try {
         const dados = JSON.parse(jsonMatch[1]);
-
-        // Remove o bloco JSON da resposta para não aparecer no Telegram do cliente
         resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
         
         if (resposta !== "") {
@@ -266,6 +278,9 @@ app.post("/webhook", async (req, res) => {
         
         if (resultado.success) {
           await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
+          
+          // ✅ APAGA A MEMÓRIA! O Agendamento terminou, a próxima mensagem será um novo assunto.
+          delete memoriaConversas[chatId];
         } else {
           await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message}`);
         }
@@ -275,7 +290,6 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // Se não tiver JSON (se for só uma conversa normal), manda a resposta limpa
     await sendMessage(chatId, resposta);
 
   } catch (err) {
