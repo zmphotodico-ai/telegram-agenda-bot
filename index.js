@@ -17,23 +17,33 @@ const memoriaConversas = {};
 // =============================
 // GOOGLE CALENDAR CONFIG
 // =============================
-let GOOGLE_CONFIG;
+let calendar;
 try {
-  GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
-  GOOGLE_CONFIG.private_key = GOOGLE_CONFIG.private_key.replace(/\\n/g, "\n");
+  const GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
+  
+  // Tratamento blindado para a chave privada no servidor do Railway
+  let privateKey = GOOGLE_CONFIG.private_key;
+  if (privateKey.includes("\\n")) {
+    privateKey = privateKey.split("\\n").join("\n");
+  }
+
+  // Usando o Padrão Ouro de autenticação do Google
+  const auth = new google.auth.GoogleAuth({
+    credentials: {
+      client_email: GOOGLE_CONFIG.client_email,
+      private_key: privateKey,
+    },
+    projectId: GOOGLE_CONFIG.project_id,
+    scopes: ["https://www.googleapis.com/auth/calendar"]
+  });
+
+  calendar = google.calendar({ version: "v3", auth });
+  console.log("✅ Autenticação blindada do Google configurada com sucesso!");
+
 } catch (err) {
-  console.error("❌ Erro ao carregar GOOGLE_CONFIG", err);
+  console.error("❌ Erro fatal na configuração do Google:", err);
   process.exit(1);
 }
-
-const auth = new google.auth.JWT(
-  GOOGLE_CONFIG.client_email,
-  null,
-  GOOGLE_CONFIG.private_key,
-  ["https://www.googleapis.com/auth/calendar"]
-);
-
-const calendar = google.calendar({ version: "v3", auth });
 
 // =============================
 // BUSCAR AGENDA HOJE
