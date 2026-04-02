@@ -130,7 +130,7 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
 }
 
 // =============================
-// CRIAR EVENTO
+// CRIAR EVENTO (ATUALIZADO COM O VISUAL NOVO)
 // =============================
 async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao) {
   try {
@@ -148,8 +148,23 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
 
+    // Formata a hora final para o título (ex: 12:00)
+    const horaFim = endDate.toLocaleTimeString("pt-BR", { 
+      hour: "2-digit", 
+      minute: "2-digit", 
+      timeZone: "America/Sao_Paulo" 
+    });
+
+    // Pega a primeira letra da sessão (ex: Corporativo -> C, Ensaio -> E)
+    const sigla = tipoSessao ? tipoSessao.charAt(0).toUpperCase() : 'C';
+
     const event = {
-      summary: `${tipoSessao} - ${nome}`,
+      // O visual na agenda vai ficar: 10:00-12:00 /C
+      summary: `${horaInicio}-${horaFim} /${sigla}`, 
+      
+      // Os detalhes do cliente ficam guardados na descrição do evento
+      description: `Cliente: ${nome}\nTipo de Sessão: ${tipoSessao}\nDuração: ${duracaoMinutos} min`,
+      
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
     };
