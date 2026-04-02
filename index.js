@@ -162,7 +162,6 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 
     const event = {
       summary: `${horaInicio}-${horaFim} /${estudio.toUpperCase()}`, 
-      // Agora a descrição salva a quantidade de pessoas!
       description: `Cliente: ${nome}\nEstúdio: ${estudio}\nProdução: ${tipoSessao}\nPessoas: ${qtdPessoas}\nDuração: ${duracaoMinutos} min`,
       colorId: mapeamentoCores[estudio.toUpperCase()] || '8',
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
@@ -210,34 +209,42 @@ async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
 * Acima de 8 pessoas: valor a combinar. Diária de 12h é cobrada como 10h. 
 * Estacionamento: R$10 o período (precisa pedir antes).
 
-🎬 REGRAS IMPORTANTES (ÁUDIO E SUJEIRA):
-- Gravação de VÍDEO COM ÁUDIO: É obrigatório alugar TODOS os estúdios do endereço (os três da Bela Vista ou A e B da Aclimação) devido ao som ambiente.
+🎬 REGRAS IMPORTANTES:
+- Gravação de VÍDEO COM ÁUDIO: É obrigatório alugar TODOS os estúdios do endereço (os três da Bela Vista ou A e B da Aclimação).
 - O tempo de montagem/desmontagem conta na locação.
 - Proibido pisar na curva do fundo infinito. Taxa de R$150 se entregue muito sujo.
 - Fundo de papel cobrado à parte se sujar/pisar (R$100/metro).
 
 📸 EQUIPAMENTOS:
-- INCLUSO: Fundo branco infinito, 2 flashs 400w c/ softbox OU 2 tochas led, rádio flash. Auxiliamos na montagem e sincronização.
-- PAGO À PARTE: Câmeras (5D R$200, 6D R$100), Luz Contínua Godox (R$120), Tripé Manfrotto (R$40), etc.
+- INCLUSO: Fundo branco infinito, 2 flashs 400w c/ softbox OU 2 tochas led, rádio flash.
+- PAGO À PARTE: Câmeras, Luz Contínua Godox, Tripé Manfrotto, etc.
 
-💳 PAGAMENTO E RESERVA:
+💳 PAGAMENTO:
 - Confirmação mediante pagamento antecipado de 1/3 do valor via PIX.
-- PIX CPF: 299.201.788-45 ou PIX Celular: 11941666756 (Dionizio Felippe e Silva - Bradesco/Itaú).
-- Reagendamento/Cancelamento: Só com mais de 48h de antecedência para ter devolução do sinal.
+- PIX CPF: 299.201.788-45 ou Celular: 11941666756 (Dionizio Felippe e Silva).
 
-🔗 LINKS ÚTEIS (Envie se pedirem fotos):
+🔗 LINKS ÚTEIS:
 - Fotos Bela Vista: https://drive.google.com/drive/folders/1Navk6o2Gy9cDlD9FKAuizH8hd3nTMLEW?usp=sharing
 - Fotos Aclimação: https://drive.google.com/drive/folders/100GPqd9sWFRtEE5YPZCYhyvDkBNV__G9?usp=sharing
 =============================
 
-Hoje é: ${hoje} (Horário de Brasília)
+Hoje é: ${hoje}
 ${agendaHoje}
 
 REGRAS DE ATENDIMENTO E RESERVA:
-- Faça o orçamento para o cliente baseando-se no dia da semana, quantidade de pessoas e horas.
-- 🚨 SE o cliente quiser ver a grade completa de horários, mande este link: ${LINK_AGENDA}
-- Para fechar a reserva, você DEVE coletar 7 informações: Nome, Estúdio, Data, Hora Início, Duração (minutos), Tipo de Produção e QUANTIDADE DE PESSOAS.
-- No FINAL da confirmação, envie o JSON EXATAMENTE como abaixo:
+1. SEMPRE responda como um humano amigável.
+2. Faça o orçamento com base no dia, pessoas e horas.
+3. Se o cliente quiser ver a grade completa de horários, mande: ${LINK_AGENDA}
+4. Para fechar a reserva, você DEVE confirmar 7 informações com o cliente: 
+   - Nome Completo (Se ele não falou o nome, pergunte!)
+   - Estúdio escolhido
+   - Data
+   - Hora Início
+   - Duração em minutos
+   - Tipo de Produção
+   - Quantidade de Pessoas
+5. SÓ ENVIE O JSON quando você tiver todas as 7 informações acima confirmadas. Se faltar alguma, faça a pergunta ao cliente.
+6. O formato final do JSON deve ser EXATAMENTE este:
 \`\`\`json
 {
  "nome":"Nome Cliente",
@@ -263,15 +270,30 @@ REGRAS DE ATENDIMENTO E RESERVA:
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: promptCompleto }] }],
-        generationConfig: { temperature: 0.1 }
+        generationConfig: { temperature: 0.1 },
+        // 👇 AQUI DESLIGAMOS OS FILTROS DE SEGURANÇA PARA ELE NÃO TRAVAR COM REGRAS 👇
+        safetySettings: [
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+        ]
       })
     });
+    
     const data = await res.json();
-    const respostaBot = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
+    
+    let respostaBot = "Pode repetir?";
+    if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+      respostaBot = data.candidates[0].content.parts[0].text.trim();
+    }
+    
     const respostaLimpaParaMemoria = respostaBot.replace(/```json[\s\S]*?```/i, "").trim();
     if (respostaLimpaParaMemoria !== "") memoriaConversas[chatId].push(`Assistente: ${respostaLimpaParaMemoria}`);
+    
     return respostaBot;
   } catch (err) {
+    console.error("❌ Erro de Fetch no Gemini:", err.message);
     return "Minha conexão falhou. Tente de novo.";
   }
 }
@@ -289,6 +311,7 @@ app.post("/webhook", async (req, res) => {
   try {
     const agendaSemana = await buscarAgendaSemana();
     let resposta = await gerarRespostaGemini(chatId, agendaSemana, texto);
+    
     const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); 
     
     if (jsonMatch) {
@@ -298,7 +321,6 @@ app.post("/webhook", async (req, res) => {
         if (resposta !== "") await sendMessage(chatId, resposta);
         await sendMessage(chatId, "Verificando disponibilidade do estúdio... 📅");
         
-        // Passando a quantidade de pessoas para a função salvar na agenda
         const resultado = await criarEventoGoogleCalendar(
           dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos, dados.tipo_sessao, dados.estudio, dados.qtd_pessoas
         );
@@ -309,15 +331,4 @@ app.post("/webhook", async (req, res) => {
           const msgGuia = `Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇\n\n📄 Clique aqui para acessar: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing`;
           await sendMessage(chatId, msgGuia);
 
-          delete memoriaConversas[chatId];
-        } else {
-          await sendMessage(chatId, `❌ Indisponível: ${resultado.message}`);
-        }
-        return; 
-      } catch (e) { console.error(e); }
-    }
-    await sendMessage(chatId, resposta);
-  } catch (err) { console.error(err); }
-});
-
-app.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
+          delete memoriaConversas
