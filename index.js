@@ -44,46 +44,6 @@ try {
 }
 
 // =============================
-// BUSCAR AGENDA HOJE
-// =============================
-async function buscarAgendaHoje() {
-  try {
-    const inicio = new Date();
-    inicio.setHours(0, 0, 0, 0);
-
-    const fim = new Date();
-    fim.setHours(23, 59, 59, 999);
-
-    const res = await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: inicio.toISOString(),
-      timeMax: fim.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
-      timeZone: "America/Sao_Paulo"
-    });
-
-    const eventos = res.data.items || [];
-
-    if (eventos.length === 0) {
-      return "Hoje a agenda está totalmente livre das 08:00 às 18:00.";
-    }
-
-    const lista = eventos.map(ev => {
-      const start = new Date(ev.start.dateTime || ev.start.date);
-      const hora = start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
-      return `• Ocupado às ${hora} (${ev.summary})`;
-    }).join("\n");
-
-    return `Agenda de hoje:\n${lista}\n\nATENÇÃO: Qualquer horário não listado acima está DISPONÍVEL.`;
-
-  } catch (err) {
-    console.error("❌ Erro ao buscar agenda:", err.message);
-    return "Não consegui consultar a agenda.";
-  }
-}
-
-// =============================
 // ENVIAR MENSAGEM TELEGRAM
 // =============================
 async function sendMessage(chatId, text) {
@@ -104,9 +64,9 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// VERIFICAR DISPONIBILIDADE
+// VERIFICAR DISPONIBILIDADE (POR ESTÚDIO ESPECÍFICO)
 // =============================
-async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
+async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudioAlvo) {
   try {
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
@@ -119,7 +79,16 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
       timeZone: "America/Sao_Paulo"
     });
 
-    return res.data.items.length === 0;
+    const eventosConflitantes = res.data.items || [];
+    
+    // 🧠 A MÁGICA: Ele filtra para ver se o conflito é no MESMO estúdio
+    // Procura no título (summary) se termina com a sigla do estúdio (ex: "/A")
+    const ocupadoNoMesmoEstudio = eventosConflitantes.some(ev => {
+        const titulo = ev.summary || "";
+        return titulo.endsWith(`/${estudioAlvo.toUpperCase()}`);
+    });
+
+    return !ocupadoNoMesmoEstudio; // Retorna true se o estúdio específico estiver livre
 
   } catch (err) {
     console.error("❌ Erro ao verificar disponibilidade:", err.message);
@@ -128,23 +97,61 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
 }
 
 // =============================
-// CRIAR EVENTO (COM CORES POR ESTÚDIO)
+// BUSCAR AGENDA HOJE
+// =============================
+async function buscarAgendaHoje() {
+    try {
+      const inicio = new Date();
+      inicio.setHours(0, 0, 0, 0);
+  
+      const fim = new Date();
+      fim.setHours(23, 59, 59, 999);
+  
+      const res = await calendar.events.list({
+        calendarId: CALENDAR_ID,
+        timeMin: inicio.toISOString(),
+        timeMax: fim.toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        timeZone: "America/Sao_Paulo"
+      });
+  
+      const eventos = res.data.items || [];
+  
+      if (eventos.length === 0) {
+        return "Hoje a agenda de todos os estúdios está livre.";
+      }
+  
+      const lista = eventos.map(ev => {
+        const start = new Date(ev.start.dateTime || ev.start.date);
+        const hora = start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+        return `• ${ev.summary} (Ocupado)`;
+      }).join("\n");
+  
+      return `Ocupações de hoje:\n${lista}\n\nLembre-se: Se um estúdio não aparece na lista acima, ele está DISPONÍVEL.`;
+  
+    } catch (err) {
+      console.error("❌ Erro ao buscar agenda:", err.message);
+      return "Não consegui consultar a agenda.";
+    }
+  }
+
+// =============================
+// CRIAR EVENTO
 // =============================
 async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio) {
   try {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) throw new Error("Formato de data inválido");
-    if (!/^\d{2}:\d{2}$/.test(horaInicio)) throw new Error("Formato de hora inválido");
-
     duracaoMinutos = Number(duracaoMinutos) || 120;
 
     if (duracaoMinutos < 120) {
       return { success: false, message: "A locação mínima é de 2 horas (120 minutos)." };
     }
 
-    const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos);
+    // Passamos o 'estudio' para a verificação ser inteligente
+    const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudio);
 
     if (!disponivel) {
-      return { success: false, message: "Horário indisponível na agenda." };
+      return { success: false, message: `O Estúdio ${estudio} já está ocupado nesse horário.` };
     }
 
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
@@ -156,93 +163,69 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
       timeZone: "America/Sao_Paulo" 
     });
 
-    // 🎨 MAPEAMENTO DE CORES DO GOOGLE
     const mapeamentoCores = {
-      'A': '1',  // Lavanda
-      'B': '2',  // Sálvia (Verde claro)
-      'AB': '3', // Uva (Roxo)
-      'C': '4',  // Flamingo (Rosa/Vermelho)
-      'D': '5',  // Banana (Amarelo)
-      '1': '6',  // Tangerina (Laranja)
-      '2': '7',  // Pavão (Azul turquesa)
-      '3': '10'  // Manjericão (Verde escuro)
+      'A': '1', 'B': '2', 'AB': '3', 'C': '4', 'D': '5', '1': '6', '2': '7', '3': '10'
     };
 
     const event = {
-      summary: `${horaInicio}-${horaFim} /${estudio}`, 
-      description: `Cliente: ${nome}\nEstúdio Escolhido: ${estudio}\nTipo de Produção/Sessão: ${tipoSessao}\nDuração total: ${duracaoMinutos} min`,
-      
-      // ✅ AQUI É ONDE A MÁGICA DA COR ACONTECE
-      colorId: mapeamentoCores[estudio.toUpperCase()] || '8', // '8' é Grafite (cor padrão se der erro)
-      
+      summary: `${horaInicio}-${horaFim} /${estudio.toUpperCase()}`, 
+      description: `Cliente: ${nome}\nEstúdio: ${estudio}\nProdução: ${tipoSessao}\nDuração: ${duracaoMinutos} min`,
+      colorId: mapeamentoCores[estudio.toUpperCase()] || '8',
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
     };
 
     const response = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: event });
 
-    console.log("✅ Evento colorido criado com sucesso no Google Calendar!");
+    console.log("✅ Evento criado!");
     return { success: true, link: response.data.htmlLink };
 
   } catch (err) {
-    console.error("❌ Erro ao criar evento:", err.message);
+    console.error("❌ Erro:", err.message);
     return { success: false, message: err.message };
   }
 }
 
 // =============================
-// GEMINI COM MEMÓRIA (REGRAS DE LOCAÇÃO)
+// GEMINI COM MEMÓRIA
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   const hoje = new Date().toLocaleDateString("pt-BR");
   
-  const prompt = `Você é o assistente de atendimento e agendamento da empresa "Aluguel de Estúdio Fotográfico".
-Nós ALUGAMOS estúdios para fotógrafos, videomakers e produtores. Nós NÃO fotografamos.
+  const prompt = `Você é o assistente da empresa "Aluguel de Estúdio Fotográfico".
+Nós ALUGAMOS salas para produtores. Não fotografamos.
 
-Temos estúdios em 2 endereços em São Paulo:
-1. Unidade Aclimação: Estúdio A, Estúdio B, Estúdio AB, Estúdio C e Estúdio D.
-2. Unidade Bela Vista: Estúdio 1, Estúdio 2 e Estúdio 3.
+Estúdios Aclimação: A, B, AB, C e D.
+Estúdios Bela Vista: 1, 2 e 3.
 
 Hoje é: ${hoje}
-Agenda atual:
+Ocupações hoje:
 ${agendaHoje}
 
 REGRAS:
-- Sempre responda de forma amigável, comercial e profissional.
-- 🚨 REGRA DE OURO: O período MÍNIMO de locação é de 2 horas (120 minutos). Nunca agende menos que isso.
-- Se o cliente não souber qual estúdio quer, apresente as opções e pergunte a preferência.
-- Para agendar, você DEVE coletar:
-  1. Nome completo do responsável
-  2. Qual estúdio deseja alugar (A, B, AB, C, D, 1, 2 ou 3)
-  3. Data (AAAA-MM-DD)
-  4. Hora de início (HH:MM)
-  5. Duração total (em minutos - mínimo 120)
-  6. Tipo de produção (ex: podcast, ensaio moda, vídeo curso)
-- No FINAL da mensagem, se for para confirmar o agendamento, escreva EXATAMENTE o bloco abaixo com os dados preenchidos:
+- Locação MÍNIMA de 2 horas (120 minutos).
+- É possível ter vários agendamentos no mesmo horário, desde que sejam em ESTÚDIOS DIFERENTES.
+- Informe ao cliente que o horário está livre se o estúdio específico que ele quer não estiver na lista de ocupados.
+- Colete: Nome, Estúdio (A, B, AB, C, D, 1, 2 ou 3), Data, Hora de Início, Duração (mínimo 120) e Tipo de Produção.
+- No FINAL da confirmação, envie o JSON:
 \`\`\`json
 {
  "nome":"Nome Cliente",
  "data":"AAAA-MM-DD",
  "hora_inicio":"HH:MM",
  "duracao_minutos":120,
- "tipo_sessao":"Tipo de Produção",
+ "tipo_sessao":"Produção",
  "estudio":"A"
 }
 \`\`\``;
 
-  if (!memoriaConversas[chatId]) {
-    memoriaConversas[chatId] = [];
-  }
-
+  if (!memoriaConversas[chatId]) memoriaConversas[chatId] = [];
   memoriaConversas[chatId].push(`Cliente: ${pergunta}`);
-
-  if (memoriaConversas[chatId].length > 8) {
-    memoriaConversas[chatId].shift();
-  }
+  if (memoriaConversas[chatId].length > 8) memoriaConversas[chatId].shift();
 
   const historicoTexto = memoriaConversas[chatId].join("\n");
-  const promptCompleto = `${prompt}\n\n[HISTÓRICO DA CONVERSA]\n${historicoTexto}\nAssistente:`;
+  const promptCompleto = `${prompt}\n\n[HISTÓRICO]\n${historicoTexto}\nAssistente:`;
 
   try {
     const res = await fetch(url, {
@@ -253,27 +236,13 @@ REGRAS:
         generationConfig: { temperature: 0.1 }
       })
     });
-
     const data = await res.json();
-    
-    if (data.error) {
-      memoriaConversas[chatId].pop(); 
-      console.error("❌ Erro da API Gemini:", data.error.message);
-      return "Tive um problema na minha inteligência agora. Pode repetir?";
-    }
-
     const respostaBot = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
-
     const respostaLimpaParaMemoria = respostaBot.replace(/```json[\s\S]*?```/i, "").trim();
-    if (respostaLimpaParaMemoria !== "") {
-      memoriaConversas[chatId].push(`Assistente: ${respostaLimpaParaMemoria}`);
-    }
-
+    if (respostaLimpaParaMemoria !== "") memoriaConversas[chatId].push(`Assistente: ${respostaLimpaParaMemoria}`);
     return respostaBot;
-
   } catch (err) {
-    console.error("❌ Erro de conexão com Gemini:", err.message);
-    return "Minha conexão com a IA falhou agora. Pode tentar novamente?";
+    return "Minha conexão falhou. Tente de novo.";
   }
 }
 
@@ -282,59 +251,38 @@ REGRAS:
 // =============================
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   const msg = req.body?.message;
   if (!msg?.text) return;
-
   const chatId = msg.chat.id;
   const texto = msg.text;
 
   try {
     const agenda = await buscarAgendaHoje();
     let resposta = await gerarRespostaGemini(chatId, agenda, texto);
-
     const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); 
     
     if (jsonMatch) {
       try {
         const dados = JSON.parse(jsonMatch[1]);
         resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
-        
-        if (resposta !== "") {
-          await sendMessage(chatId, resposta);
-        }
-        
-        await sendMessage(chatId, "Salvando na agenda... 📅");
+        if (resposta !== "") await sendMessage(chatId, resposta);
+        await sendMessage(chatId, "Verificando disponibilidade do estúdio... 📅");
         
         const resultado = await criarEventoGoogleCalendar(
-          dados.nome,
-          dados.data,
-          dados.hora_inicio,
-          dados.duracao_minutos,
-          dados.tipo_sessao,
-          dados.estudio 
+          dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos, dados.tipo_sessao, dados.estudio 
         );
         
         if (resultado.success) {
-          await sendMessage(chatId, `✅ Agendamento no Estúdio ${dados.estudio} confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
+          await sendMessage(chatId, `✅ Sucesso! Estúdio ${dados.estudio} reservado para ${dados.data} às ${dados.hora_inicio}.`);
           delete memoriaConversas[chatId];
         } else {
-          await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message}`);
+          await sendMessage(chatId, `❌ Indisponível: ${resultado.message}`);
         }
         return; 
-      } catch (jsonError) {
-        console.error("❌ Erro ao ler os dados do Gemini:", jsonError.message);
-      }
+      } catch (e) { console.error(e); }
     }
-
     await sendMessage(chatId, resposta);
-
-  } catch (err) {
-    console.error("❌ Erro geral no Webhook:", err.message);
-    await sendMessage(chatId, "Tive um erro interno. Pode tentar de novo?");
-  }
+  } catch (err) { console.error(err); }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
