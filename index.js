@@ -64,11 +64,13 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// VERIFICAR DISPONIBILIDADE (POR ESTÚDIO ESPECÍFICO)
+// VERIFICAR DISPONIBILIDADE (COM AJUSTE DE FUSO)
 // =============================
 async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudioAlvo) {
   try {
-    const startDate = new Date(`${dataStr}T${horaInicio}:00`);
+    // Forçamos o fuso -03:00 (Brasília) na consulta
+    const startISO = `${dataStr}T${horaInicio}:00-03:00`;
+    const startDate = new Date(startISO);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
 
     const res = await calendar.events.list({
@@ -80,15 +82,12 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, est
     });
 
     const eventosConflitantes = res.data.items || [];
-    
-    // 🧠 A MÁGICA: Ele filtra para ver se o conflito é no MESMO estúdio
-    // Procura no título (summary) se termina com a sigla do estúdio (ex: "/A")
     const ocupadoNoMesmoEstudio = eventosConflitantes.some(ev => {
         const titulo = ev.summary || "";
         return titulo.endsWith(`/${estudioAlvo.toUpperCase()}`);
     });
 
-    return !ocupadoNoMesmoEstudio; // Retorna true se o estúdio específico estiver livre
+    return !ocupadoNoMesmoEstudio;
 
   } catch (err) {
     console.error("❌ Erro ao verificar disponibilidade:", err.message);
@@ -101,10 +100,12 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, est
 // =============================
 async function buscarAgendaHoje() {
     try {
-      const inicio = new Date();
+      const hoje = new Date();
+      // Ajuste manual para o dia começar e terminar no fuso Brasil para a busca
+      const inicio = new Date(hoje.toLocaleDateString("en-US", {timeZone: "America/Sao_Paulo"}));
       inicio.setHours(0, 0, 0, 0);
   
-      const fim = new Date();
+      const fim = new Date(inicio.getTime());
       fim.setHours(23, 59, 59, 999);
   
       const res = await calendar.events.list({
@@ -137,7 +138,7 @@ async function buscarAgendaHoje() {
   }
 
 // =============================
-// CRIAR EVENTO
+// CRIAR EVENTO (COM AJUSTE DE FUSO)
 // =============================
 async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio) {
   try {
@@ -147,14 +148,15 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
       return { success: false, message: "A locação mínima é de 2 horas (120 minutos)." };
     }
 
-    // Passamos o 'estudio' para a verificação ser inteligente
     const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudio);
 
     if (!disponivel) {
       return { success: false, message: `O Estúdio ${estudio} já está ocupado nesse horário.` };
     }
 
-    const startDate = new Date(`${dataStr}T${horaInicio}:00`);
+    // Criamos as datas garantindo o fuso -03:00 de Brasília
+    const startISO = `${dataStr}T${horaInicio}:00-03:00`;
+    const startDate = new Date(startISO);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
 
     const horaFim = endDate.toLocaleTimeString("pt-BR", { 
@@ -171,13 +173,19 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
       summary: `${horaInicio}-${horaFim} /${estudio.toUpperCase()}`, 
       description: `Cliente: ${nome}\nEstúdio: ${estudio}\nProdução: ${tipoSessao}\nDuração: ${duracaoMinutos} min`,
       colorId: mapeamentoCores[estudio.toUpperCase()] || '8',
-      start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
-      end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
+      start: { 
+        dateTime: startDate.toISOString(), 
+        timeZone: "America/Sao_Paulo" 
+      },
+      end: { 
+        dateTime: endDate.toISOString(), 
+        timeZone: "America/Sao_Paulo" 
+      }
     };
 
     const response = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: event });
 
-    console.log("✅ Evento criado!");
+    console.log("✅ Evento criado com fuso horário corrigido!");
     return { success: true, link: response.data.htmlLink };
 
   } catch (err) {
@@ -191,23 +199,21 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-  const hoje = new Date().toLocaleDateString("pt-BR");
+  const hoje = new Date().toLocaleDateString("pt-BR", {timeZone: "America/Sao_Paulo"});
   
   const prompt = `Você é o assistente da empresa "Aluguel de Estúdio Fotográfico".
-Nós ALUGAMOS salas para produtores. Não fotografamos.
+Nós ALUGAMOS salas para produtores em São Paulo.
 
 Estúdios Aclimação: A, B, AB, C e D.
 Estúdios Bela Vista: 1, 2 e 3.
 
-Hoje é: ${hoje}
+Hoje é: ${hoje} (Horário de Brasília)
 Ocupações hoje:
 ${agendaHoje}
 
 REGRAS:
 - Locação MÍNIMA de 2 horas (120 minutos).
-- É possível ter vários agendamentos no mesmo horário, desde que sejam em ESTÚDIOS DIFERENTES.
-- Informe ao cliente que o horário está livre se o estúdio específico que ele quer não estiver na lista de ocupados.
-- Colete: Nome, Estúdio (A, B, AB, C, D, 1, 2 ou 3), Data, Hora de Início, Duração (mínimo 120) e Tipo de Produção.
+- Colete: Nome, Estúdio, Data, Hora de Início, Duração e Tipo de Produção.
 - No FINAL da confirmação, envie o JSON:
 \`\`\`json
 {
