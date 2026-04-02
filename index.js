@@ -11,7 +11,7 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
 
-// ✅ MEMÓRIA DO BOT (Para ele não esquecer o que vocês estavam falando)
+// ✅ MEMÓRIA DO BOT
 const memoriaConversas = {};
 
 // =============================
@@ -128,16 +128,15 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
 }
 
 // =============================
-// CRIAR EVENTO (COM TRAVA DE 2 HORAS)
+// CRIAR EVENTO (COM CORES POR ESTÚDIO)
 // =============================
 async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio) {
   try {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) throw new Error("Formato de data inválido");
     if (!/^\d{2}:\d{2}$/.test(horaInicio)) throw new Error("Formato de hora inválido");
 
-    duracaoMinutos = Number(duracaoMinutos) || 120; // Padrão agora é 120 min
+    duracaoMinutos = Number(duracaoMinutos) || 120;
 
-    // Trava de segurança: impede agendar menos de 120 minutos
     if (duracaoMinutos < 120) {
       return { success: false, message: "A locação mínima é de 2 horas (120 minutos)." };
     }
@@ -157,16 +156,32 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
       timeZone: "America/Sao_Paulo" 
     });
 
+    // 🎨 MAPEAMENTO DE CORES DO GOOGLE
+    const mapeamentoCores = {
+      'A': '1',  // Lavanda
+      'B': '2',  // Sálvia (Verde claro)
+      'AB': '3', // Uva (Roxo)
+      'C': '4',  // Flamingo (Rosa/Vermelho)
+      'D': '5',  // Banana (Amarelo)
+      '1': '6',  // Tangerina (Laranja)
+      '2': '7',  // Pavão (Azul turquesa)
+      '3': '10'  // Manjericão (Verde escuro)
+    };
+
     const event = {
       summary: `${horaInicio}-${horaFim} /${estudio}`, 
       description: `Cliente: ${nome}\nEstúdio Escolhido: ${estudio}\nTipo de Produção/Sessão: ${tipoSessao}\nDuração total: ${duracaoMinutos} min`,
+      
+      // ✅ AQUI É ONDE A MÁGICA DA COR ACONTECE
+      colorId: mapeamentoCores[estudio.toUpperCase()] || '8', // '8' é Grafite (cor padrão se der erro)
+      
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
     };
 
     const response = await calendar.events.insert({ calendarId: CALENDAR_ID, resource: event });
 
-    console.log("✅ Evento criado com sucesso no Google Calendar!");
+    console.log("✅ Evento colorido criado com sucesso no Google Calendar!");
     return { success: true, link: response.data.htmlLink };
 
   } catch (err) {
@@ -176,7 +191,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI COM MEMÓRIA (REGRAS ATUALIZADAS)
+// GEMINI COM MEMÓRIA (REGRAS DE LOCAÇÃO)
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
@@ -195,17 +210,15 @@ ${agendaHoje}
 
 REGRAS:
 - Sempre responda de forma amigável, comercial e profissional.
-- 🚨 REGRA DE OURO: O período MÍNIMO de locação é de 2 horas. Se o cliente pedir 1 hora ou menos, explique educadamente que a locação mínima é de 2 horas.
+- 🚨 REGRA DE OURO: O período MÍNIMO de locação é de 2 horas (120 minutos). Nunca agende menos que isso.
 - Se o cliente não souber qual estúdio quer, apresente as opções e pergunte a preferência.
-- Para agendar, você DEVE coletar as seguintes 6 informações com o cliente ANTES de prosseguir:
+- Para agendar, você DEVE coletar:
   1. Nome completo do responsável
-  2. Qual estúdio deseja alugar (Ex: A, B, AB, C, D, 1, 2 ou 3)
-  3. Data desejada (AAAA-MM-DD)
+  2. Qual estúdio deseja alugar (A, B, AB, C, D, 1, 2 ou 3)
+  3. Data (AAAA-MM-DD)
   4. Hora de início (HH:MM)
-  5. Duração total da locação (em minutos - LEMBRE-SE: MÍNIMO DE 120 MINUTOS)
-  6. Qual será o tipo de produção (ex: ensaio de moda, podcast, gravação de curso)
-- Faça um resumo de todos esses dados e peça a confirmação final do cliente.
-- Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que a pessoa aprova o agendamento.
+  5. Duração total (em minutos - mínimo 120)
+  6. Tipo de produção (ex: podcast, ensaio moda, vídeo curso)
 - No FINAL da mensagem, se for para confirmar o agendamento, escreva EXATAMENTE o bloco abaixo com os dados preenchidos:
 \`\`\`json
 {
