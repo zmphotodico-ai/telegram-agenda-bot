@@ -10,7 +10,6 @@ const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
-
 const LINK_AGENDA = "https://calendar.google.com/calendar/embed?src=alugueldeestudiofotografico%40gmail.com&ctz=America%2FSao_Paulo";
 
 // ✅ MEMÓRIA DO BOT
@@ -141,13 +140,9 @@ async function buscarAgendaSemana() {
 // =============================
 // CRIAR EVENTO
 // =============================
-async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio) {
+async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio, qtdPessoas) {
   try {
     duracaoMinutos = Number(duracaoMinutos) || 120;
-
-    if (duracaoMinutos < 120) {
-      return { success: false, message: "A locação mínima é de 2 horas (120 minutos)." };
-    }
 
     const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudio);
 
@@ -159,11 +154,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
     const startDate = new Date(startISO);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
 
-    const horaFim = endDate.toLocaleTimeString("pt-BR", { 
-      hour: "2-digit", 
-      minute: "2-digit", 
-      timeZone: "America/Sao_Paulo" 
-    });
+    const horaFim = endDate.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
 
     const mapeamentoCores = {
       'A': '1', 'B': '2', 'AB': '3', 'C': '4', 'D': '5', '1': '6', '2': '7', '3': '10'
@@ -171,7 +162,8 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 
     const event = {
       summary: `${horaInicio}-${horaFim} /${estudio.toUpperCase()}`, 
-      description: `Cliente: ${nome}\nEstúdio: ${estudio}\nProdução: ${tipoSessao}\nDuração: ${duracaoMinutos} min`,
+      // Agora a descrição salva a quantidade de pessoas!
+      description: `Cliente: ${nome}\nEstúdio: ${estudio}\nProdução: ${tipoSessao}\nPessoas: ${qtdPessoas}\nDuração: ${duracaoMinutos} min`,
       colorId: mapeamentoCores[estudio.toUpperCase()] || '8',
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
@@ -187,26 +179,65 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI COM MEMÓRIA
+// GEMINI COM MEMÓRIA E REGRAS COMPLETAS DO ESTÚDIO
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   const hoje = new Date().toLocaleDateString("pt-BR", {timeZone: "America/Sao_Paulo"});
   
-  const prompt = `Você é o assistente da "Aluguel de Estúdio Fotográfico". Nós ALUGAMOS salas para produções.
+  const prompt = `Você é o assistente de atendimento da "Aluguel de Estúdio Fotográfico". Nós ALUGAMOS salas, não fotografamos.
 
-Unidade Aclimação: A, B, AB, C e D.
-Unidade Bela Vista: 1, 2 e 3.
+=============================
+📄 INFORMAÇÕES, REGRAS E VALORES DO ESTÚDIO:
+
+💰 VALORES POR HORA:
+- Aclimação Seg a Sex (Mínimo 2 horas):
+  - 1 a 2 pessoas: Estúdios A, B, C, D (R$70/h). Estúdio A e B juntos (R$100/h).
+  - 3 a 5 pessoas: Estúdios A, B, C, D (R$80/h). Estúdio A e B juntos (R$110/h).
+  - 6 a 8 pessoas: Estúdios A, B, C, D (R$100/h). Estúdio A e B juntos (R$130/h).
+- Aclimação Fim de Semana/Feriado (Mínimo 3 horas):
+  - 1 a 2 pessoas: Estúdios A, B, C, D (R$80/h). Estúdio A e B juntos (R$110/h).
+  - 3 a 5 pessoas: Estúdios A, B, C, D (R$90/h). Estúdio A e B juntos (R$120/h).
+  - 6 a 8 pessoas: Estúdios A, B, C (R$110/h). Estúdio D (R$100/h). Estúdio A e B juntos (R$140/h).
+- Bela Vista Seg a Sex (Mínimo 2 horas):
+  - 1 a 2 pessoas: Estúdio 1 (R$70/h), Estúdio 2 (R$50/h), Estúdio 3 (R$60/h).
+  - 3 a 5 pessoas: Estúdio 1 (R$80/h), Estúdio 2 (R$60/h), Estúdio 3 (R$70/h).
+  - 6 a 8 pessoas: Estúdio 1 (R$100/h), Estúdio 2 (R$80/h), Estúdio 3 (R$90/h).
+- Bela Vista Fim de Semana/Feriado (Mínimo 4 horas):
+  - 1 a 2 pessoas: Estúdio 1 (R$80/h), Estúdio 2 (R$70/h), Estúdio 3 (R$80/h).
+  - 3 a 5 pessoas: Estúdio 1 (R$90/h), Estúdio 2 (R$80/h), Estúdio 3 (R$80/h).
+  - 6 a 8 pessoas: Estúdio 1 (R$110/h), Estúdio 2 (R$100/h), Estúdio 3 (R$100/h).
+* Acima de 8 pessoas: valor a combinar. Diária de 12h é cobrada como 10h. 
+* Estacionamento: R$10 o período (precisa pedir antes).
+
+🎬 REGRAS IMPORTANTES (ÁUDIO E SUJEIRA):
+- Gravação de VÍDEO COM ÁUDIO: É obrigatório alugar TODOS os estúdios do endereço (os três da Bela Vista ou A e B da Aclimação) devido ao som ambiente.
+- O tempo de montagem/desmontagem conta na locação.
+- Proibido pisar na curva do fundo infinito. Taxa de R$150 se entregue muito sujo.
+- Fundo de papel cobrado à parte se sujar/pisar (R$100/metro).
+
+📸 EQUIPAMENTOS:
+- INCLUSO: Fundo branco infinito, 2 flashs 400w c/ softbox OU 2 tochas led, rádio flash. Auxiliamos na montagem e sincronização.
+- PAGO À PARTE: Câmeras (5D R$200, 6D R$100), Luz Contínua Godox (R$120), Tripé Manfrotto (R$40), etc.
+
+💳 PAGAMENTO E RESERVA:
+- Confirmação mediante pagamento antecipado de 1/3 do valor via PIX.
+- PIX CPF: 299.201.788-45 ou PIX Celular: 11941666756 (Dionizio Felippe e Silva - Bradesco/Itaú).
+- Reagendamento/Cancelamento: Só com mais de 48h de antecedência para ter devolução do sinal.
+
+🔗 LINKS ÚTEIS (Envie se pedirem fotos):
+- Fotos Bela Vista: https://drive.google.com/drive/folders/1Navk6o2Gy9cDlD9FKAuizH8hd3nTMLEW?usp=sharing
+- Fotos Aclimação: https://drive.google.com/drive/folders/100GPqd9sWFRtEE5YPZCYhyvDkBNV__G9?usp=sharing
+=============================
 
 Hoje é: ${hoje} (Horário de Brasília)
 ${agendaHoje}
 
-REGRAS:
-- Locação MÍNIMA de 2 horas (120 min).
-- Se o cliente perguntar disponibilidades, use a lista acima.
-- 🚨 SE o cliente estiver muito indeciso ou quiser ver a grade completa, mande este link: ${LINK_AGENDA}
-- Coletar: Nome, Estúdio, Data, Hora de Início, Duração (min 120) e Tipo de Produção.
-- No FINAL da confirmação, envie o JSON:
+REGRAS DE ATENDIMENTO E RESERVA:
+- Faça o orçamento para o cliente baseando-se no dia da semana, quantidade de pessoas e horas.
+- 🚨 SE o cliente quiser ver a grade completa de horários, mande este link: ${LINK_AGENDA}
+- Para fechar a reserva, você DEVE coletar 7 informações: Nome, Estúdio, Data, Hora Início, Duração (minutos), Tipo de Produção e QUANTIDADE DE PESSOAS.
+- No FINAL da confirmação, envie o JSON EXATAMENTE como abaixo:
 \`\`\`json
 {
  "nome":"Nome Cliente",
@@ -214,7 +245,8 @@ REGRAS:
  "hora_inicio":"HH:MM",
  "duracao_minutos":120,
  "tipo_sessao":"Produção",
- "estudio":"A"
+ "estudio":"A",
+ "qtd_pessoas": 4
 }
 \`\`\``;
 
@@ -266,14 +298,14 @@ app.post("/webhook", async (req, res) => {
         if (resposta !== "") await sendMessage(chatId, resposta);
         await sendMessage(chatId, "Verificando disponibilidade do estúdio... 📅");
         
+        // Passando a quantidade de pessoas para a função salvar na agenda
         const resultado = await criarEventoGoogleCalendar(
-          dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos, dados.tipo_sessao, dados.estudio 
+          dados.nome, dados.data, dados.hora_inicio, dados.duracao_minutos, dados.tipo_sessao, dados.estudio, dados.qtd_pessoas
         );
         
         if (resultado.success) {
           await sendMessage(chatId, `✅ Sucesso! Estúdio ${dados.estudio} reservado para ${dados.data} às ${dados.hora_inicio}.`);
           
-          // ✅ SOLUÇÃO DO PDF: Envia a mensagem com o link direto e clicável!
           const msgGuia = `Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇\n\n📄 Clique aqui para acessar: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing`;
           await sendMessage(chatId, msgGuia);
 
