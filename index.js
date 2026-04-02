@@ -11,9 +11,6 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
 
-// ✅ Link do seu PDF configurado para download direto
-const PDF_URL = "https://drive.google.com/uc?export=download&id=1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb"; 
-
 const LINK_AGENDA = "https://calendar.google.com/calendar/embed?src=alugueldeestudiofotografico%40gmail.com&ctz=America%2FSao_Paulo";
 
 // ✅ MEMÓRIA DO BOT
@@ -65,22 +62,6 @@ async function sendMessage(chatId, text) {
     } catch (e) {
       console.error("⚠️ Falha ao enviar mensagem");
     }
-  }
-}
-
-// =============================
-// ENVIAR DOCUMENTO (PDF)
-// =============================
-async function sendDocument(chatId, documentUrl) {
-  const url = `https://api.telegram.org/bot${TOKEN}/sendDocument`;
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, document: documentUrl })
-    });
-  } catch (e) {
-    console.error("⚠️ Falha ao enviar PDF");
   }
 }
 
@@ -292,9 +273,9 @@ app.post("/webhook", async (req, res) => {
         if (resultado.success) {
           await sendMessage(chatId, `✅ Sucesso! Estúdio ${dados.estudio} reservado para ${dados.data} às ${dados.hora_inicio}.`);
           
-          // Envia o PDF informativo automaticamente após o agendamento
-          await sendMessage(chatId, "Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇");
-          await sendDocument(chatId, PDF_URL);
+          // ✅ SOLUÇÃO DO PDF: Envia a mensagem com o link direto e clicável!
+          const msgGuia = `Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇\n\n📄 Clique aqui para acessar: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing`;
+          await sendMessage(chatId, msgGuia);
 
           delete memoriaConversas[chatId];
         } else {
