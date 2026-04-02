@@ -21,13 +21,11 @@ let calendar;
 try {
   const GOOGLE_CONFIG = JSON.parse(process.env.GOOGLE_CONFIG);
   
-  // Tratamento blindado para a chave privada no servidor do Railway
   let privateKey = GOOGLE_CONFIG.private_key;
   if (privateKey.includes("\\n")) {
     privateKey = privateKey.split("\\n").join("\n");
   }
 
-  // Usando o Padrão Ouro de autenticação do Google
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: GOOGLE_CONFIG.client_email,
@@ -130,41 +128,38 @@ async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos) {
 }
 
 // =============================
-// CRIAR EVENTO (ATUALIZADO COM O VISUAL NOVO)
+// CRIAR EVENTO (COM TRAVA DE 2 HORAS)
 // =============================
-async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao) {
+async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinutos, tipoSessao, estudio) {
   try {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dataStr)) throw new Error("Formato de data inválido");
     if (!/^\d{2}:\d{2}$/.test(horaInicio)) throw new Error("Formato de hora inválido");
 
-    duracaoMinutos = Number(duracaoMinutos) || 60;
+    duracaoMinutos = Number(duracaoMinutos) || 120; // Padrão agora é 120 min
+
+    // Trava de segurança: impede agendar menos de 120 minutos
+    if (duracaoMinutos < 120) {
+      return { success: false, message: "A locação mínima é de 2 horas (120 minutos)." };
+    }
 
     const disponivel = await verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos);
 
     if (!disponivel) {
-      return { success: false, message: "Horário indisponível na agenda do fotógrafo." };
+      return { success: false, message: "Horário indisponível na agenda." };
     }
 
     const startDate = new Date(`${dataStr}T${horaInicio}:00`);
     const endDate = new Date(startDate.getTime() + duracaoMinutos * 60000);
 
-    // Formata a hora final para o título (ex: 12:00)
     const horaFim = endDate.toLocaleTimeString("pt-BR", { 
       hour: "2-digit", 
       minute: "2-digit", 
       timeZone: "America/Sao_Paulo" 
     });
 
-    // Pega a primeira letra da sessão (ex: Corporativo -> C, Ensaio -> E)
-    const sigla = tipoSessao ? tipoSessao.charAt(0).toUpperCase() : 'C';
-
     const event = {
-      // O visual na agenda vai ficar: 10:00-12:00 /C
-      summary: `${horaInicio}-${horaFim} /${sigla}`, 
-      
-      // Os detalhes do cliente ficam guardados na descrição do evento
-      description: `Cliente: ${nome}\nTipo de Sessão: ${tipoSessao}\nDuração: ${duracaoMinutos} min`,
-      
+      summary: `${horaInicio}-${horaFim} /${estudio}`, 
+      description: `Cliente: ${nome}\nEstúdio Escolhido: ${estudio}\nTipo de Produção/Sessão: ${tipoSessao}\nDuração total: ${duracaoMinutos} min`,
       start: { dateTime: startDate.toISOString(), timeZone: "America/Sao_Paulo" },
       end: { dateTime: endDate.toISOString(), timeZone: "America/Sao_Paulo" }
     };
@@ -181,51 +176,58 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI COM MEMÓRIA
+// GEMINI COM MEMÓRIA (REGRAS ATUALIZADAS)
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   const hoje = new Date().toLocaleDateString("pt-BR");
   
-  const prompt = `Você é o assistente de agendamento do fotógrafo Dionizio.
+  const prompt = `Você é o assistente de atendimento e agendamento da empresa "Aluguel de Estúdio Fotográfico".
+Nós ALUGAMOS estúdios para fotógrafos, videomakers e produtores. Nós NÃO fotografamos.
+
+Temos estúdios em 2 endereços em São Paulo:
+1. Unidade Aclimação: Estúdio A, Estúdio B, Estúdio AB, Estúdio C e Estúdio D.
+2. Unidade Bela Vista: Estúdio 1, Estúdio 2 e Estúdio 3.
+
 Hoje é: ${hoje}
 Agenda atual:
 ${agendaHoje}
 
 REGRAS:
-- Sempre responda de forma amigável e profissional.
-- Para agendar, confirme todos os detalhes com o cliente antes de prosseguir.
-- Peça explicitamente:
-  1. data (AAAA-MM-DD)
-  2. hora inicial (HH:MM)
-  3. nome completo
-  4. tipo de sessão
-- Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que a pessoa disse que aprova/confirma/pode prosseguir.
+- Sempre responda de forma amigável, comercial e profissional.
+- 🚨 REGRA DE OURO: O período MÍNIMO de locação é de 2 horas. Se o cliente pedir 1 hora ou menos, explique educadamente que a locação mínima é de 2 horas.
+- Se o cliente não souber qual estúdio quer, apresente as opções e pergunte a preferência.
+- Para agendar, você DEVE coletar as seguintes 6 informações com o cliente ANTES de prosseguir:
+  1. Nome completo do responsável
+  2. Qual estúdio deseja alugar (Ex: A, B, AB, C, D, 1, 2 ou 3)
+  3. Data desejada (AAAA-MM-DD)
+  4. Hora de início (HH:MM)
+  5. Duração total da locação (em minutos - LEMBRE-SE: MÍNIMO DE 120 MINUTOS)
+  6. Qual será o tipo de produção (ex: ensaio de moda, podcast, gravação de curso)
+- Faça um resumo de todos esses dados e peça a confirmação final do cliente.
+- Só envie o bloco JSON quando o cliente confirmar TODOS os dados e você tiver certeza de que a pessoa aprova o agendamento.
 - No FINAL da mensagem, se for para confirmar o agendamento, escreva EXATAMENTE o bloco abaixo com os dados preenchidos:
 \`\`\`json
 {
  "nome":"Nome Cliente",
  "data":"AAAA-MM-DD",
  "hora_inicio":"HH:MM",
- "duracao_minutos":60,
- "tipo_sessao":"Tipo de Sessão"
+ "duracao_minutos":120,
+ "tipo_sessao":"Tipo de Produção",
+ "estudio":"A"
 }
 \`\`\``;
 
-  // ✅ 1. Inicia a memória para o cliente, se não existir
   if (!memoriaConversas[chatId]) {
     memoriaConversas[chatId] = [];
   }
 
-  // ✅ 2. Salva a nova mensagem do cliente na memória
   memoriaConversas[chatId].push(`Cliente: ${pergunta}`);
 
-  // Mantém apenas as últimas 8 mensagens para não bugar a IA
   if (memoriaConversas[chatId].length > 8) {
     memoriaConversas[chatId].shift();
   }
 
-  // ✅ 3. Junta todo o histórico num texto só
   const historicoTexto = memoriaConversas[chatId].join("\n");
   const promptCompleto = `${prompt}\n\n[HISTÓRICO DA CONVERSA]\n${historicoTexto}\nAssistente:`;
 
@@ -242,14 +244,13 @@ REGRAS:
     const data = await res.json();
     
     if (data.error) {
-      memoriaConversas[chatId].pop(); // Remove a última mensagem falha
+      memoriaConversas[chatId].pop(); 
       console.error("❌ Erro da API Gemini:", data.error.message);
       return "Tive um problema na minha inteligência agora. Pode repetir?";
     }
 
     const respostaBot = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Pode repetir?";
 
-    // ✅ 4. Salva a resposta do bot na memória (limpando códigos JSON ocultos)
     const respostaLimpaParaMemoria = respostaBot.replace(/```json[\s\S]*?```/i, "").trim();
     if (respostaLimpaParaMemoria !== "") {
       memoriaConversas[chatId].push(`Assistente: ${respostaLimpaParaMemoria}`);
@@ -277,7 +278,6 @@ app.post("/webhook", async (req, res) => {
 
   try {
     const agenda = await buscarAgendaHoje();
-    // ✅ Passamos o chatId para a função saber qual memória buscar
     let resposta = await gerarRespostaGemini(chatId, agenda, texto);
 
     const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i); 
@@ -298,13 +298,12 @@ app.post("/webhook", async (req, res) => {
           dados.data,
           dados.hora_inicio,
           dados.duracao_minutos,
-          dados.tipo_sessao
+          dados.tipo_sessao,
+          dados.estudio 
         );
         
         if (resultado.success) {
-          await sendMessage(chatId, `✅ Agendamento confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
-          
-          // ✅ APAGA A MEMÓRIA! O Agendamento terminou, a próxima mensagem será um novo assunto.
+          await sendMessage(chatId, `✅ Agendamento no Estúdio ${dados.estudio} confirmado para o dia ${dados.data} às ${dados.hora_inicio}!`);
           delete memoriaConversas[chatId];
         } else {
           await sendMessage(chatId, `❌ Ops! Não consegui salvar na agenda. Motivo: ${resultado.message}`);
