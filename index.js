@@ -59,7 +59,7 @@ async function sendMessage(chatId, text) {
       if (res.ok) return;
       await new Promise(r => setTimeout(r, 800));
     } catch (e) {
-      console.error("⚠️ Falha ao enviar mensagem");
+      console.error("⚠️ Falha de conexão ao enviar mensagem para o Telegram.");
     }
   }
 }
@@ -178,7 +178,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI COM MEMÓRIA E REGRAS COMPLETAS DO ESTÚDIO
+// GEMINI COM MEMÓRIA
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
@@ -187,64 +187,23 @@ async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const prompt = `Você é o assistente de atendimento da "Aluguel de Estúdio Fotográfico". Nós ALUGAMOS salas, não fotografamos.
 
 =============================
-📄 INFORMAÇÕES, REGRAS E VALORES DO ESTÚDIO:
-
-💰 VALORES POR HORA:
-- Aclimação Seg a Sex (Mínimo 2 horas):
-  - 1 a 2 pessoas: Estúdios A, B, C, D (R$70/h). Estúdio A e B juntos (R$100/h).
-  - 3 a 5 pessoas: Estúdios A, B, C, D (R$80/h). Estúdio A e B juntos (R$110/h).
-  - 6 a 8 pessoas: Estúdios A, B, C, D (R$100/h). Estúdio A e B juntos (R$130/h).
-- Aclimação Fim de Semana/Feriado (Mínimo 3 horas):
-  - 1 a 2 pessoas: Estúdios A, B, C, D (R$80/h). Estúdio A e B juntos (R$110/h).
-  - 3 a 5 pessoas: Estúdios A, B, C, D (R$90/h). Estúdio A e B juntos (R$120/h).
-  - 6 a 8 pessoas: Estúdios A, B, C (R$110/h). Estúdio D (R$100/h). Estúdio A e B juntos (R$140/h).
-- Bela Vista Seg a Sex (Mínimo 2 horas):
-  - 1 a 2 pessoas: Estúdio 1 (R$70/h), Estúdio 2 (R$50/h), Estúdio 3 (R$60/h).
-  - 3 a 5 pessoas: Estúdio 1 (R$80/h), Estúdio 2 (R$60/h), Estúdio 3 (R$70/h).
-  - 6 a 8 pessoas: Estúdio 1 (R$100/h), Estúdio 2 (R$80/h), Estúdio 3 (R$90/h).
-- Bela Vista Fim de Semana/Feriado (Mínimo 4 horas):
-  - 1 a 2 pessoas: Estúdio 1 (R$80/h), Estúdio 2 (R$70/h), Estúdio 3 (R$80/h).
-  - 3 a 5 pessoas: Estúdio 1 (R$90/h), Estúdio 2 (R$80/h), Estúdio 3 (R$80/h).
-  - 6 a 8 pessoas: Estúdio 1 (R$110/h), Estúdio 2 (R$100/h), Estúdio 3 (R$100/h).
-* Acima de 8 pessoas: valor a combinar. Diária de 12h é cobrada como 10h. 
-* Estacionamento: R$10 o período (precisa pedir antes).
-
-🎬 REGRAS IMPORTANTES:
-- Gravação de VÍDEO COM ÁUDIO: É obrigatório alugar TODOS os estúdios do endereço (os três da Bela Vista ou A e B da Aclimação).
-- O tempo de montagem/desmontagem conta na locação.
-- Proibido pisar na curva do fundo infinito. Taxa de R$150 se entregue muito sujo.
-- Fundo de papel cobrado à parte se sujar/pisar (R$100/metro).
-
-📸 EQUIPAMENTOS:
-- INCLUSO: Fundo branco infinito, 2 flashs 400w c/ softbox OU 2 tochas led, rádio flash.
-- PAGO À PARTE: Câmeras, Luz Contínua Godox, Tripé Manfrotto, etc.
-
-💳 PAGAMENTO:
-- Confirmação mediante pagamento antecipado de 1/3 do valor via PIX.
-- PIX CPF: 299.201.788-45 ou Celular: 11941666756 (Dionizio Felippe e Silva).
-
-🔗 LINKS ÚTEIS:
-- Fotos Bela Vista: https://drive.google.com/drive/folders/1Navk6o2Gy9cDlD9FKAuizH8hd3nTMLEW?usp=sharing
-- Fotos Aclimação: https://drive.google.com/drive/folders/100GPqd9sWFRtEE5YPZCYhyvDkBNV__G9?usp=sharing
+📄 INFORMAÇÕES E VALORES:
+- Aclimação Seg a Sex: 1-2 pessoas (R$70/h). 3-5 (R$80/h). 6-8 (R$100/h).
+- Bela Vista Seg a Sex: Estúdio 1 (R$70/h), 2 (R$50/h), 3 (R$60/h) para 1-2 pessoas.
+- Locação MÍNIMA: 2 horas. 
+- Finais de semana os valores aumentam e o mínimo sobe para 3 ou 4 horas.
+- VÍDEO COM ÁUDIO: Exige alugar todos os estúdios do endereço (A e B juntos, ou 1, 2 e 3 juntos).
+- Equipamentos base já estão inclusos.
 =============================
 
 Hoje é: ${hoje}
 ${agendaHoje}
 
-REGRAS DE ATENDIMENTO E RESERVA:
-1. SEMPRE responda como um humano amigável.
-2. Faça o orçamento com base no dia, pessoas e horas.
-3. Se o cliente quiser ver a grade completa de horários, mande: ${LINK_AGENDA}
-4. Para fechar a reserva, você DEVE confirmar 7 informações com o cliente: 
-   - Nome Completo (Se ele não falou o nome, pergunte!)
-   - Estúdio escolhido
-   - Data
-   - Hora Início
-   - Duração em minutos
-   - Tipo de Produção
-   - Quantidade de Pessoas
-5. SÓ ENVIE O JSON quando você tiver todas as 7 informações acima confirmadas. Se faltar alguma, faça a pergunta ao cliente.
-6. O formato final do JSON deve ser EXATAMENTE este:
+REGRAS:
+1. Sempre seja cordial. 
+2. Se o cliente quiser a grade completa de horários, envie: ${LINK_AGENDA}
+3. PARA AGENDAR, você precisa confirmar 7 informações: Nome, Estúdio (A,B,AB,C,D,1,2 ou 3), Data, Hora, Duração, Produção e Quantidade de Pessoas.
+4. Só mande o JSON abaixo se tiver certeza que o cliente informou todos os 7 dados e concordou.
 \`\`\`json
 {
  "nome":"Nome Cliente",
@@ -271,7 +230,6 @@ REGRAS DE ATENDIMENTO E RESERVA:
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: promptCompleto }] }],
         generationConfig: { temperature: 0.1 },
-        // 👇 AQUI DESLIGAMOS OS FILTROS DE SEGURANÇA PARA ELE NÃO TRAVAR COM REGRAS 👇
         safetySettings: [
           { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
           { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -283,7 +241,12 @@ REGRAS DE ATENDIMENTO E RESERVA:
     
     const data = await res.json();
     
-    let respostaBot = "Pode repetir?";
+    if (data.error) {
+      console.error("❌ ERRO DA API GEMINI:", data.error.message);
+      return "Estou reiniciando meus sistemas. Pode tentar novamente em alguns minutos?";
+    }
+
+    let respostaBot = "Desculpe, me confundi. Pode repetir a última informação?";
     if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
       respostaBot = data.candidates[0].content.parts[0].text.trim();
     }
@@ -294,7 +257,7 @@ REGRAS DE ATENDIMENTO E RESERVA:
     return respostaBot;
   } catch (err) {
     console.error("❌ Erro de Fetch no Gemini:", err.message);
-    return "Minha conexão falhou. Tente de novo.";
+    return "Minha conexão com a inteligência falhou agora. Pode tentar novamente?";
   }
 }
 
@@ -307,6 +270,8 @@ app.post("/webhook", async (req, res) => {
   if (!msg?.text) return;
   const chatId = msg.chat.id;
   const texto = msg.text;
+
+  console.log(`📩 Nova mensagem recebida: ${texto}`);
 
   try {
     const agendaSemana = await buscarAgendaSemana();
@@ -331,4 +296,19 @@ app.post("/webhook", async (req, res) => {
           const msgGuia = `Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇\n\n📄 Clique aqui para acessar: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing`;
           await sendMessage(chatId, msgGuia);
 
-          delete memoriaConversas
+          delete memoriaConversas[chatId];
+        } else {
+          await sendMessage(chatId, `❌ Indisponível: ${resultado.message}`);
+        }
+        return; 
+      } catch (e) { console.error("Erro no JSON:", e); }
+    }
+    
+    await sendMessage(chatId, resposta);
+  } catch (err) { 
+    console.error("❌ ERRO FATAL NO WEBHOOK:", err); 
+    await sendMessage(chatId, "Opa, tive um pequeno curto-circuito aqui! 🤖⚡ Pode mandar a mensagem de novo?");
+  }
+});
+
+app.listen(PORT, () => console.log(`🚀 Porta ${PORT} rodando com sucesso!`));
