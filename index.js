@@ -12,6 +12,9 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
 const LINK_AGENDA = "https://calendar.google.com/calendar/embed?src=alugueldeestudiofotografico%40gmail.com&ctz=America%2FSao_Paulo";
 
+// ✅ SEU ID DE ADMIN PARA O MODO ESPIÃO
+const ADMIN_CHAT_ID = "8132670973";
+
 // ✅ MEMÓRIA DO BOT
 const memoriaConversas = {};
 
@@ -45,7 +48,7 @@ try {
 }
 
 // =============================
-// ENVIAR MENSAGEM (TEXTO)
+// ENVIAR MENSAGEM (CLIENTE)
 // =============================
 async function sendMessage(chatId, text) {
   const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
@@ -59,8 +62,25 @@ async function sendMessage(chatId, text) {
       if (res.ok) return;
       await new Promise(r => setTimeout(r, 800));
     } catch (e) {
-      console.error("⚠️ Falha de conexão ao enviar mensagem para o Telegram.");
+      console.error("⚠️ Falha de conexão ao enviar mensagem.");
     }
+  }
+}
+
+// =============================
+// ENVIAR NOTIFICAÇÃO (ADMIN) - O MODO ESPIÃO
+// =============================
+async function sendAdminNotification(text) {
+  if (!ADMIN_CHAT_ID) return;
+  const url = `https://api.telegram.org/bot${TOKEN}/sendMessage`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text: text })
+    });
+  } catch (e) {
+    console.error("⚠️ Falha ao notificar o Admin.");
   }
 }
 
@@ -178,7 +198,7 @@ async function criarEventoGoogleCalendar(nome, dataStr, horaInicio, duracaoMinut
 }
 
 // =============================
-// GEMINI COM MEMÓRIA
+// GEMINI COM MEMÓRIA E REGRAS COMPLETAS DO ESTÚDIO
 // =============================
 async function gerarRespostaGemini(chatId, agendaHoje, pergunta) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
@@ -270,8 +290,14 @@ app.post("/webhook", async (req, res) => {
   if (!msg?.text) return;
   const chatId = msg.chat.id;
   const texto = msg.text;
+  const nomeUsuario = msg.from.first_name || "Alguém";
 
-  console.log(`📩 Nova mensagem recebida: ${texto}`);
+  console.log(`📩 Nova mensagem de ${nomeUsuario}: ${texto}`);
+
+  // 🕵️‍♂️ MODO ESPIÃO: Avisa o Admin do que o cliente mandou (se não for o próprio Admin testando)
+  if (String(chatId) !== ADMIN_CHAT_ID) {
+    await sendAdminNotification(`👤 *${nomeUsuario}* mandou:\n"${texto}"`);
+  }
 
   try {
     const agendaSemana = await buscarAgendaSemana();
@@ -283,7 +309,13 @@ app.post("/webhook", async (req, res) => {
       try {
         const dados = JSON.parse(jsonMatch[1]);
         resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
-        if (resposta !== "") await sendMessage(chatId, resposta);
+        
+        if (resposta !== "") {
+          await sendMessage(chatId, resposta);
+          // 🕵️‍♂️ MODO ESPIÃO
+          if (String(chatId) !== ADMIN_CHAT_ID) await sendAdminNotification(`🤖 *Bot respondeu:*\n"${resposta}"`);
+        }
+        
         await sendMessage(chatId, "Verificando disponibilidade do estúdio... 📅");
         
         const resultado = await criarEventoGoogleCalendar(
@@ -291,10 +323,16 @@ app.post("/webhook", async (req, res) => {
         );
         
         if (resultado.success) {
-          await sendMessage(chatId, `✅ Sucesso! Estúdio ${dados.estudio} reservado para ${dados.data} às ${dados.hora_inicio}.`);
+          const msgSucesso = `✅ Sucesso! Estúdio ${dados.estudio} reservado para ${dados.data} às ${dados.hora_inicio}.`;
+          await sendMessage(chatId, msgSucesso);
           
           const msgGuia = `Estou te enviando nosso guia informativo com as regras e dicas do estúdio! 👇\n\n📄 Clique aqui para acessar: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing`;
           await sendMessage(chatId, msgGuia);
+
+          // 🕵️‍♂️ MODO ESPIÃO: Avisa o Admin que fechou negócio!
+          if (String(chatId) !== ADMIN_CHAT_ID) {
+             await sendAdminNotification(`🎉 *NOVO AGENDAMENTO FECHADO PELO BOT!* 🎉\nO cliente ${nomeUsuario} acabou de reservar o Estúdio ${dados.estudio}. Confira a sua agenda!`);
+          }
 
           delete memoriaConversas[chatId];
         } else {
@@ -305,6 +343,12 @@ app.post("/webhook", async (req, res) => {
     }
     
     await sendMessage(chatId, resposta);
+    
+    // 🕵️‍♂️ MODO ESPIÃO: Mostra a resposta normal da IA
+    if (String(chatId) !== ADMIN_CHAT_ID) {
+      await sendAdminNotification(`🤖 *Bot respondeu:*\n"${resposta}"`);
+    }
+
   } catch (err) { 
     console.error("❌ ERRO FATAL NO WEBHOOK:", err); 
     await sendMessage(chatId, "Opa, tive um pequeno curto-circuito aqui! 🤖⚡ Pode mandar a mensagem de novo?");
