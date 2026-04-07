@@ -1,35 +1,17 @@
 import express from "express";
+import fetch from "node-fetch"; // Se usar Node 18+, pode remover essa linha
 import { google } from "googleapis";
 
 const app = express();
 app.use(express.json());
 
-// =============================
-// VALIDAÇÃO DE VARIÁVEIS
-// =============================
-const REQUIRED_ENV = ["BOT_TOKEN", "GEMINI_API_KEY", "GOOGLE_CONFIG"];
-const missingEnv = REQUIRED_ENV.filter((name) => !process.env[name]);
-if (missingEnv.length > 0) {
-  console.error(`❌ Variáveis obrigatórias ausentes: ${missingEnv.join(", ")}`);
-  process.exit(1);
-}
-
-const PORT = Number(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
-const LINK_AGENDA = "https://calendar.google.com/calendar/embed?src=alugueldeestudiofotografico%40gmail.com&ctz=America%2FSao_Paulo";
-const PDF_INFORMATIVO = "https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing";
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "8132670973";
 const TIMEZONE = "America/Sao_Paulo";
 
-const MEMORY_LIMIT = 10;
-
-// =============================
-// MEMÓRIA E TIMERS
-// =============================
-const conversationMemory = new Map();
-const timersCobranca = new Map();
+const conversationMemory = new Map(); // Memória por chat
 
 // =============================
 // GOOGLE CALENDAR
@@ -37,361 +19,263 @@ const timersCobranca = new Map();
 let calendar;
 try {
   const googleConfig = JSON.parse(process.env.GOOGLE_CONFIG);
-  const privateKey = googleConfig.private_key?.replace(/\\n/g, "\n");
+  const privateKey = googleConfig.private_key.replace(/\\n/g, "\n");
 
   const auth = new google.auth.GoogleAuth({
-    credentials: { client_email: googleConfig.client_email, private_key: privateKey },
-    projectId: googleConfig.project_id,
+    credentials: {
+      client_email: googleConfig.client_email,
+      private_key: privateKey,
+    },
     scopes: ["https://www.googleapis.com/auth/calendar"],
   });
 
   calendar = google.calendar({ version: "v3", auth });
-  console.log("✅ Google Calendar conectado com sucesso");
-} catch (err) {
-  console.error("❌ Erro ao configurar Google Calendar:", err);
-  process.exit(1);
+  console.log("✅ Google Calendar conectado com sucesso.");
+} catch (error) {
+  console.error("❌ Erro ao conectar Google Calendar:", error);
 }
 
 // =============================
-// FUNÇÕES TELEGRAM
+// FUNÇÃO PARA ENVIAR MENSAGEM (Telegram)
 // =============================
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function postTelegram(method, payload, retries = 2) {
-  const url = `https://api.telegram.org/bot${TOKEN}/${method}`;
-  for (let attempt = 1; attempt <= retries + 1; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) return true;
-    } catch (error) {
-      console.error(`Telegram erro (tentativa ${attempt}):`, error.message);
-    }
-    if (attempt <= retries) await delay(600 * attempt);
-  }
-  return false;
-}
-
 async function sendMessage(chatId, text) {
-  if (!text?.trim()) return;
-  await postTelegram("sendMessage", {
-    chat_id: chatId,
-    text,
-    parse_mode: "Markdown",
-    disable_web_page_preview: true,
-  });
-}
-
-async function sendAdminNotification(text) {
-  if (ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🕵️ *MODO ESPIÃO*\n${text}`);
-}
-
-// =============================
-// COBRANÇA E CANCELAMENTO AUTOMÁTICO
-// =============================
-function gerenciarReguaDeCobranca(chatId, acao, eventId = null) {
-  if (acao === "PARAR") {
-    const timers = timersCobranca.get(chatId);
-    if (timers) {
-      clearTimeout(timers.t6);
-      clearTimeout(timers.t12);
-      clearTimeout(timers.t24);
-      timersCobranca.delete(chatId);
-    }
-    return;
-  }
-
-  gerenciarReguaDeCobranca(chatId, "PARAR");
-
-  timersCobranca.set(chatId, {
-    t6: setTimeout(() => sendMessage(chatId, "Olá! Ainda não recebemos o sinal da sua reserva. O horário segue pré-reservado por enquanto. 👍"), 6 * 3600 * 1000),
-    t12: setTimeout(() => sendMessage(chatId, "Ainda tem interesse no horário? Precisamos do sinal para não liberar a data para outro cliente."), 12 * 3600 * 1000),
-    t24: setTimeout(async () => {
-      await sendMessage(chatId, "⚠️ O prazo para o sinal expirou e sua pré-reserva foi cancelada automaticamente.\nCaso queira reagendar, é só me chamar!");
-
-      if (eventId) {
-        try {
-          await calendar.events.delete({ calendarId: CALENDAR_ID, eventId });
-          console.log(`Evento ${eventId} cancelado automaticamente.`);
-          await sendAdminNotification(`🗑️ Cancelamento automático: Evento removido da agenda por falta de pagamento em 24h.`);
-        } catch (err) {
-          console.error("Erro ao deletar evento automaticamente:", err.message);
-        }
-      }
-      timersCobranca.delete(chatId);
-    }, 24 * 3600 * 1000),
-  });
-}
-
-// =============================
-// VALIDAÇÃO
-// =============================
-function isValidDate(date) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) && !isNaN(new Date(`${date}T00:00:00-03:00`).getTime());
-}
-
-function isValidHour(hour) {
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(hour);
-}
-
-function normalizeBookingPayload(raw) {
-  if (!raw || typeof raw !== "object") return null;
-
-  const data = {
-    nome: String(raw.nome || "").trim(),
-    data: String(raw.data || "").trim(),
-    hora_inicio: String(raw.hora_inicio || "").trim(),
-    duracao_minutos: Number(raw.duracao_minutos),
-    tipo_sessao: String(raw.tipo_sessao || "").trim(),
-    estudio: String(raw.estudio || "").trim().toUpperCase(),
-    qtd_pessoas: Number(raw.qtd_pessoas || 2),
-  };
-
-  if (!data.nome || !data.data || !data.hora_inicio || !data.tipo_sessao || !data.estudio) return null;
-  if (!isValidDate(data.data) || !isValidHour(data.hora_inicio)) return null;
-  if (!Number.isInteger(data.duracao_minutos) || data.duracao_minutos < 60) return null;
-
-  return data;
-}
-
-// =============================
-// AGENDA E EVENTOS
-// =============================
-async function buscarAgendaSemana() {
+  if (!chatId) return;
   try {
-    const inicio = new Date();
-    inicio.setHours(0, 0, 0, 0);
-    const fim = new Date(inicio.getTime() + 7 * 24 * 60 * 60 * 1000);
-    fim.setHours(23, 59, 59, 999);
-
-    const res = await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: inicio.toISOString(),
-      timeMax: fim.toISOString(),
-      singleEvents: true,
-      orderBy: "startTime",
-      timeZone: TIMEZONE,
+    await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+      }),
     });
-
-    const eventos = res.data.items || [];
-    if (eventos.length === 0) return "A agenda dos próximos 7 dias está totalmente livre.";
-
-    const lista = eventos.map((ev) => {
-      const start = new Date(ev.start.dateTime || ev.start.date);
-      return `• ${start.toLocaleDateString("pt-BR")} às ${start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} → ${ev.summary}`;
-    }).join("\n");
-
-    return `Ocupações dos próximos 7 dias:\n${lista}\n\nO que não aparece na lista está LIVRE.`;
-  } catch (err) {
-    console.error("Erro ao buscar agenda:", err);
-    return "Não consegui consultar a agenda no momento.";
-  }
-}
-
-async function verificarDisponibilidade(dataStr, horaInicio, duracaoMinutos, estudioAlvo) {
-  try {
-    const start = new Date(`${dataStr}T${horaInicio}:00-03:00`);
-    const end = new Date(start.getTime() + duracaoMinutos * 60000);
-
-    const res = await calendar.events.list({
-      calendarId: CALENDAR_ID,
-      timeMin: start.toISOString(),
-      timeMax: end.toISOString(),
-      singleEvents: true,
-      timeZone: TIMEZONE,
-    });
-
-    return !(res.data.items || []).some(ev => (ev.summary || "").includes(`/${estudioAlvo}`));
-  } catch {
-    return false;
-  }
-}
-
-async function criarEventoGoogleCalendar(dados) {
-  try {
-    const disponivel = await verificarDisponibilidade(dados.data, dados.hora_inicio, dados.duracao_minutos, dados.estudio);
-    if (!disponivel) return { success: false, message: `Estúdio ${dados.estudio} ocupado nesse horário.` };
-
-    const start = new Date(`${dados.data}T${dados.hora_inicio}:00-03:00`);
-    const end = new Date(start.getTime() + dados.duracao_minutos * 60000);
-    const horaFim = end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-
-    const cores = { A: "1", B: "2", AB: "3", C: "4", D: "5", "1": "6", "2": "7", "3": "10" };
-
-    const response = await calendar.events.insert({
-      calendarId: CALENDAR_ID,
-      resource: {
-        summary: `${dados.hora_inicio}-${horaFim} /${dados.estudio}`,
-        description: `Cliente: ${dados.nome}\nEstúdio: ${dados.estudio}\nProdução: ${dados.tipo_sessao}\nPessoas: ${dados.qtd_pessoas}`,
-        colorId: cores[dados.estudio] || "8",
-        start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-        end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
-      },
-    });
-
-    return { success: true, eventId: response.data.id };
-  } catch (err) {
-    console.error("Erro criar evento:", err);
-    return { success: false, message: "Erro interno ao salvar na agenda." };
+  } catch (error) {
+    console.error("Erro ao enviar mensagem no Telegram:", error);
   }
 }
 
 // =============================
-// GEMINI (O "CÉREBRO")
+// PROMPT REAL DO GEMINI (100% baseado no PDF)
 // =============================
-async function gerarRespostaGemini(chatId, agendaSemana, pergunta) {
-  const model = "gemini-2.5-flash"; 
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${GEMINI_KEY}`;
+const SYSTEM_PROMPT = `
+Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela Vista e Aclimação).
 
-  const hoje = new Date().toLocaleDateString("pt-BR", { timeZone: TIMEZONE });
+INFORMAÇÕES IMPORTANTES (use SOMENTE estas):
 
-  const promptSistema = `Você é o assistente do "Aluguel de Estúdio Fotográfico". Responda de forma CURTA, clara e profissional.
+📍 Endereços:
+- Bela Vista: Rua Santa Madalena, 46 - Bela Vista/Liberdade (Estúdios 1, 2 e 3)
+- Aclimação: Rua Gualaxo, 206 - Aclimação/Liberdade (Estúdios A, B, C e D)
 
-REDES SOCIAIS E SITE (Envie APENAS se o cliente pedir):
-- Instagram: https://instagram.com/alugueldeestudiofotografico
-- Site: https://alugueldeestudiofotografico.com/
+💰 TABELAS DE PREÇO (por hora):
+Bela Vista - Segunda a Sexta (mínimo 2h):
+• Estúdio 1: 1-2p = R$70 | 3-5p = R$80 | 6-8p = R$100
+• Estúdio 2: 1-2p = R$50 | 3-5p = R$60 | 6-8p = R$80
+• Estúdio 3: 1-2p = R$60 | 3-5p = R$70 | 6-8p = R$90
 
-Endereços: Aclimação (Rua Gualaxos 206) | Bela Vista (Rua Santa Madalena 46).
+Bela Vista - Fim de semana/Feriado (mínimo 4h):
+• Estúdio 1: 1-2p = R$80 | 3-5p = R$90 | 6-8p = R$110
+• Estúdio 2: 1-2p = R$70 | 3-5p = R$80 | 6-8p = R$100
+• Estúdio 3: 1-2p = R$80 | 3-5p = R$80 | 6-8p = R$100
 
-PREÇOS (mín. 2h seg-sex / 3-4h fins de semana):
-- Aclimação: 1-2p R$70/h | 3-5p R$80/h | 6-8p R$100/h (A+B +R$30/h)
-- Bela Vista: Est.1 R$70/h | Est.2 R$50/h | Est.3 R$60/h
-- Diária 12h: cobre 10h efetivas
-- >8 pessoas ou madrugadas: Sob consulta (WhatsApp 11 995540293)
+Aclimação - Segunda a Sexta (mínimo 2h):
+• Estúdio A ou B: 1-2p = R$70 | 3-5p = R$80 | 6-8p = R$100
+• A+B juntos: 1-2p = R$100 | 3-5p = R$110 | 6-8p = R$130
+• Estúdio C ou D: 1-2p = R$70 | 3-5p = R$80 | 6-8p = R$100
 
-Para faturamento e pré-reserva, a empresa responsável é a Zemaria Produções Fotográficas.
-Peça 1/3 de sinal via PIX CNPJ 43.345.289/0001-93 (Zemaria Produções Fotográficas LTDA).
+Aclimação - Fim de semana/Feriado (mínimo 3h):
+• Estúdio A ou B: 1-2p = R$80 | 3-5p = R$90 | 6-8p = R$110
+• A+B juntos: 1-2p = R$110 | 3-5p = R$120 | 6-8p = R$140
+• Estúdio C: 1-2p = R$80 | 3-5p = R$90 | 6-8p = R$110
+• Estúdio D: 1-2p = R$80 | 3-5p = R$90 | 6-8p = R$100
 
-Hoje: ${hoje}
-Agenda próxima semana:\n${agendaSemana}
-PDF informativo: ${PDF_INFORMATIVO}
-Agenda completa: ${LINK_AGENDA}
+REGRAS IMPORTANTES:
+- Todos contam como pessoa (modelo, fotógrafo, maquiador, acompanhante...).
+- Reserva só com pagamento de 1/3 antecipado via PIX.
+- Acima de 8 pessoas = valor a combinar.
+- Gravação com áudio = obrigatório os 3 estúdios da Bela Vista OU os 2 da Aclimação.
+- Estacionamento R$10 por período (solicitar com antecedência).
+- Taxa de limpeza R$150 se entregar sujo.
+- Não pisar na curva do fundo infinito.
+- Não usar motor-drive nos flashes.
 
-Só gere o bloco JSON no FINAL quando o cliente confirmar TODOS os dados (nome, estúdio, data, hora, duração, tipo e pessoas).
-Use EXATAMENTE este formato abaixo para o JSON:
+ITENS INCLUSOS: Fundo branco infinito + 2 flashes ou 2 tochas LED + rádio flash.
+
+Sempre seja educado, direto e comercial. Faça upsell quando possível (ofereça o estacionamento, por exemplo).
+Em todas as suas interações de orçamento, lembre o cliente: "Para fechar a reserva me chama no WhatsApp 11 99554-0293"
+
+Se o cliente confirmar TODOS os dados (nome completo, telefone, data, horário, estúdio, quantidade de pessoas e duração), responda APENAS com um JSON válido dentro de \`\`\`json ... \`\`\`
+Exemplo de JSON:
 \`\`\`json
 {
-  "nome": "Nome do Cliente",
-  "data": "2026-05-20",
+  "nome": "João Silva",
+  "telefone": "11987654321",
+  "data": "2026-04-20",
   "hora_inicio": "14:00",
-  "duracao_minutos": 120,
-  "tipo_sessao": "Ensaio Fotográfico",
-  "estudio": "A",
+  "duracao_minutos": 180,
+  "estudio": "Estúdio 1 - Bela Vista",
   "qtd_pessoas": 3
 }
-\`\`\``;
+\`\`\`
+`;
 
-  let history = conversationMemory.get(chatId) || [];
-  history.push(`Cliente: ${pergunta}`);
-  if (history.length > MEMORY_LIMIT) history = history.slice(-MEMORY_LIMIT);
+async function gerarRespostaGemini(chatId, pergunta, historico = []) {
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+
+  // Formatação correta do histórico para a API do Google V1
+  const contentsArray = [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }];
+  
+  historico.forEach(msg => {
+     contentsArray.push({
+         role: msg.role === "user" ? "user" : "model",
+         parts: [{ text: msg.content }]
+     });
+  });
+
+  contentsArray.push({ role: "user", parts: [{ text: `Cliente: ${pergunta}` }] });
 
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: `${promptSistema}\n\nHistórico:\n${history.join("\n")}` }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 800 },
-      }),
+      body: JSON.stringify({ contents: contentsArray }),
     });
 
     const data = await res.json();
-
-    if (!res.ok || data.error) {
-      console.error("Erro Gemini:", data.error);
-      return "Desculpe, estou com dificuldade agora. Pode repetir?";
-    }
-
-    let resposta = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Não entendi, pode repetir?";
-
-    const cleanReply = resposta.replace(/```json[\s\S]*?```/i, "").trim();
-    if (cleanReply) {
-      history.push(`Assistente: ${cleanReply}`);
-      conversationMemory.set(chatId, history);
-    }
-
-    return resposta;
-  } catch (err) {
-    console.error("Falha Gemini:", err);
-    return "Minha conexão com a IA falhou. Tente novamente em alguns segundos.";
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Desculpe, não entendi. Pode repetir?";
+  } catch (error) {
+    console.error("Erro Gemini:", error);
+    return "⚠️ Minha conexão falhou. Tente novamente em alguns segundos.";
   }
 }
+
+// =============================
+// CRIAR EVENTO NO GOOGLE CALENDAR
+// =============================
+async function criarEvento(dados, chatId) {
+  try {
+    const start = new Date(`${dados.data}T${dados.hora_inicio}:00-03:00`);
+    const end = new Date(start.getTime() + dados.duracao_minutos * 60000);
+
+    const horaFim = end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+    const response = await calendar.events.insert({
+      calendarId: CALENDAR_ID,
+      resource: {
+        summary: `${dados.hora_inicio}-${horaFim} / ${dados.estudio} PRE`,
+        description: `Cliente: ${dados.nome}\nTelefone: ${dados.telefone}\nChatId: ${chatId}\nPessoas: ${dados.qtd_pessoas}\nEstúdio: ${dados.estudio}\nDuração: ${dados.duracao_minutos} min`,
+        start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+        end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+      },
+    });
+
+    return response.data.id;
+  } catch (error) {
+    console.error("Erro ao criar evento:", error);
+    return null;
+  }
+}
+
+// =============================
+// VERIFICAR PRÉ-RESERVAS PENDENTES (a cada 12h)
+// =============================
+async function verificarPreReservas() {
+  const agora = new Date();
+  try {
+    const res = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: new Date(agora.getTime() - 48 * 60 * 60 * 1000).toISOString(), // Olha 48h pra trás
+      timeMax: agora.toISOString(), // Até agora
+      singleEvents: true,
+    });
+
+    for (const ev of res.data.items || []) {
+      if (!ev.summary?.includes("PRE")) continue; // Pula o que já está confirmado
+
+      const desc = ev.description || "";
+      const chatIdMatch = desc.match(/ChatId:\s*(.*)/);
+      const nomeMatch = desc.match(/Cliente:\s*(.*)/);
+
+      if (!chatIdMatch) continue;
+
+      const chatId = chatIdMatch[1].trim();
+      const nome = nomeMatch ? nomeMatch[1].trim() : "Cliente";
+
+      const criado = new Date(ev.created);
+      const horasPassadas = (agora - criado) / 3600000;
+
+      // Se passou de 12h, mas ainda não deu 24h: Avisa
+      if (horasPassadas >= 12 && horasPassadas < 24) {
+        await sendMessage(chatId, `Olá ${nome}, sua pré-reserva ainda está pendente 😊\n\nPara confirmar a data, precisamos do envio do comprovante do PIX.`);
+      }
+
+      // Se passou de 24h: Cancela e deleta
+      if (horasPassadas >= 24) {
+        await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
+        await sendMessage(chatId, `⚠️ ${nome}, sua pré-reserva foi cancelada automaticamente por falta do comprovante de pagamento do sinal. Se desejar uma nova data, estou à disposição!`);
+        console.log(`Evento ${ev.id} deletado. Prazo 24h expirado.`);
+      }
+    }
+  } catch (error) {
+    console.error("Erro ao verificar pré-reservas:", error);
+  }
+}
+
+// Inicia o cronômetro para olhar a agenda a cada 12 horas (em milissegundos)
+setInterval(verificarPreReservas, 12 * 60 * 60 * 1000);
 
 // =============================
 // WEBHOOK
 // =============================
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-  const msg = req.body?.message;
-  if (!msg) return;
 
-  const chatId = msg.chat?.id;
-  const texto = (msg.text || msg.caption || "").trim();
-  const nomeUsuario = msg.from?.first_name || "Cliente";
-
-  // 1. Detecção de pagamento/comprovante
-  if (msg.photo || msg.document || /pago|comprovante|pix|transferência/i.test(texto)) {
-    gerenciarReguaDeCobranca(chatId, "PARAR");
-    await sendMessage(chatId, "✅ Recebido! Vou conferir o comprovante e confirmar sua reserva.");
-    if (String(chatId) !== ADMIN_CHAT_ID) {
-      await sendAdminNotification(`💰 *${nomeUsuario}* enviou comprovante!`);
-    }
-    return;
-  }
-
-  if (!texto) return;
-
-  if (String(chatId) !== ADMIN_CHAT_ID) {
-    await sendAdminNotification(`👤 *${nomeUsuario}*: ${texto}`);
-  }
-
-  const agendaSemana = await buscarAgendaSemana();
-  let resposta = await gerarRespostaGemini(chatId, agendaSemana, texto);
-
-  const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (!jsonMatch) {
-    await sendMessage(chatId, resposta);
-    return;
-  }
-
-  resposta = resposta.replace(/```json[\s\S]*?```/i, "").trim();
-  if (resposta) await sendMessage(chatId, resposta);
-
-  let dados;
   try {
-    dados = normalizeBookingPayload(JSON.parse(jsonMatch[1]));
-  } catch {
-    await sendMessage(chatId, "Não consegui ler os dados. Pode confirmar novamente?");
-    return;
-  }
+    const chatId = req.body.message?.chat?.id;
+    const texto = req.body.message?.text;
 
-  if (!dados) {
-    await sendMessage(chatId, "Algum dado está incorreto ou incompleto. Pode confirmar data, hora e estúdio?");
-    return;
-  }
+    if (!chatId || !texto) return;
 
-  await sendMessage(chatId, "Verificando disponibilidade... ⏳");
+    // Inicia memória se não existir
+    if (!conversationMemory.has(chatId)) conversationMemory.set(chatId, []);
+    const historico = conversationMemory.get(chatId);
 
-  const resultado = await criarEventoGoogleCalendar(dados);
+    const resposta = await gerarRespostaGemini(chatId, texto, historico);
 
-  if (!resultado.success) {
-    await sendMessage(chatId, `❌ ${resultado.message}`);
-    return;
-  }
+    // Salva a conversa na memória corretamente
+    historico.push({ role: "user", content: texto });
+    const respostaSemJson = resposta.replace(/```json[\s\S]*?```/i, "").trim();
+    if(respostaSemJson) {
+         historico.push({ role: "model", content: respostaSemJson });
+    }
+    
+    // Mantém a memória curta para não travar a API (limita a 10 mensagens)
+    if (historico.length > 10) conversationMemory.set(chatId, historico.slice(-10));
 
-  await sendMessage(chatId, `✅ *Pré-reserva realizada com sucesso!*\n\nEstúdio: ${dados.estudio}\nData: ${dados.data}\nHorário: ${dados.hora_inicio}\n\nAguardamos o sinal de 1/3 via PIX para confirmar definitivamente.`);
+    // Verifica se veio JSON de confirmação
+    const jsonMatch = resposta.match(/```json\s*([\s\S]*?)\s*```/);
 
-  gerenciarReguaDeCobranca(chatId, "INICIAR", resultado.eventId);
-  conversationMemory.delete(chatId);
+    if (jsonMatch) {
+      const dados = JSON.parse(jsonMatch[1]);
+      await sendMessage(chatId, "Verificando a agenda... ⏳");
+      
+      const eventId = await criarEvento(dados, chatId);
 
-  if (String(chatId) !== ADMIN_CHAT_ID) {
-    await sendAdminNotification(`🎉 *PRÉ-RESERVA:* ${dados.nome} - ${dados.estudio} - ${dados.data} ${dados.hora_inicio}`);
+      if(eventId) {
+          await sendMessage(chatId, `✅ *Pré-reserva criada com sucesso!*\nEstúdio: ${dados.estudio}\nData: ${dados.data} às ${dados.hora_inicio}\n\nPara oficializarmos na agenda, faça o pagamento do sinal (1/3 do valor) e envie o comprovante para nosso atendimento humano.\n\n📱 *WhatsApp:* 11 99554-0293\n🔑 *PIX CNPJ:* 43.345.289/0001-93`);
+          conversationMemory.set(chatId, []); // Limpa histórico após fechar negócio
+      } else {
+          await sendMessage(chatId, "❌ Ops! Tive um problema ao salvar na agenda. Pode confirmar o horário de novo?");
+      }
+    } else {
+      await sendMessage(chatId, resposta);
+    }
+  } catch (error) {
+    console.error("Erro no webhook:", error);
   }
 });
 
+// =============================
 app.listen(PORT, () => {
   console.log(`🚀 Bot Zemaria rodando na porta ${PORT}`);
 });
