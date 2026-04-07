@@ -42,12 +42,15 @@ try {
 async function sendMessage(chatId, text) {
   if (!chatId || !text) return;
   try {
+    // 👇 O "ESCUDO": Impede que o Telegram quebre a mensagem por causa dos _ nos links
+    const textoSeguro = text.replace(/_/g, "\\_");
+
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: chatId,
-        text,
+        text: textoSeguro,
         parse_mode: "Markdown",
         disable_web_page_preview: false, 
       }),
