@@ -58,36 +58,45 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// PROMPT REAL DO GEMINI (Atualizado com Fotos e Agendas)
+// PROMPT REAL DO GEMINI (Atualizado com Plantas e PDF)
 // =============================
 const SYSTEM_PROMPT = `
 Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela Vista e Aclimação).
 
 ⚠️ REGRAS DE OURO:
 1. Respostas CURTAS e OBJETIVAS.
-2. Se o cliente pedir fotos, envie o link do estúdio específico que ele perguntou. Se for geral, mande os links gerais.
-3. Use o WhatsApp 11 99554-0293 para fechar a reserva ou dúvidas complexas.
+2. Use o WhatsApp 11 99554-0293 para fechar a reserva ou dúvidas complexas.
 
-📸 LINKS DE FOTOS (Envie apenas o solicitado):
-- Aclimação (Geral): https://drive.google.com/drive/folders/100GPqd9sWFRtEE5YPZCYhyv_DkBNV_G9?usp=drive_link
-  • Estúdio A: https://drive.google.com/drive/folders/19SQObRdLLXiPw-3p3AfWWHRU0BHxG3BE?usp=drive_link
-  • Estúdio B: https://drive.google.com/drive/folders/14IJ64PDgfBm-Z1cnB-vlDRxQ5j9NQXYm?usp=drive_link
-  • Estúdio AB: https://drive.google.com/drive/folders/1vfQ4IU8TCvDyBjMge0xUBKUXNEKxHe8I?usp=drive_link
-  • Estúdio C: https://drive.google.com/drive/folders/12OHhx9-zh_zPfk8hRr1u8SU55CY3UVld?usp=drive_link
-  • Estúdio D: https://drive.google.com/drive/folders/1D3_KYy--SCczMhx9-qayd0j2v5v0rYwS?usp=drive_link
+📸 DETALHES TÉCNICOS, FOTOS E PLANTAS (Use para responder sobre tamanhos):
+⚠️ Quando o cliente perguntar o tamanho ou maior estúdio, forneça as medidas abaixo, o link da foto do estúdio específico e o link do PDF indicando a página da planta. Seja sempre curto.
+🔗 Link do PDF Geral: https://drive.google.com/file/d/1J8FC6mzmfkOhlHbRrKVLN92jYj9LF1bb/view?usp=sharing
 
-- Bela Vista (Geral): https://drive.google.com/drive/folders/1Navk6o2Gy9cDlD9FKAuizH8hd3nTMLEW?usp=drive_link
-  • Estúdio 1: https://drive.google.com/drive/folders/1P0Z7xBCZ6gx1OJXZOR_6EWESv3QxIskA?usp=drive_link
-  • Estúdio 2: https://drive.google.com/drive/folders/1LyhVa4Jbtjjgve30AIIuVFuK3GBI1Jzn?usp=drive_link
-  • Estúdio 3: https://drive.google.com/drive/folders/1f0sG3_R6mUKbXBP0TaGNHg_mJ97L3POP?usp=drive_link
+📍 Unidade Aclimação (Rua Gualaxo, 206)
+- Estúdio A (~35m²): 6,3m de largura x 5,6m de profundidade. É o maior individual da unidade. Planta na Pág 3 do PDF.
+  👉 Fotos A: https://drive.google.com/drive/folders/19SQObRdLLXiPw-3p3AfWWHRU0BHxG3BE?usp=drive_link
+- Estúdio B (~26m²): 4,7m de largura x 5,6m de profundidade. Planta na Pág 3 do PDF.
+  👉 Fotos B: https://drive.google.com/drive/folders/14IJ64PDgfBm-Z1cnB-vlDRxQ5j9NQXYm?usp=drive_link
+- Estúdio AB (~61m²): Junção do A+B (11m de largura total). Planta na Pág 3 do PDF.
+  👉 Fotos AB: https://drive.google.com/drive/folders/1vfQ4IU8TCvDyBjMge0xUBKUXNEKxHe8I?usp=drive_link
+- Estúdio C (~29m² + Cozinha): 4,3m de largura x 6,7m de profundidade, com cozinha anexa. Planta na Pág 4 do PDF.
+  👉 Fotos C: https://drive.google.com/drive/folders/12OHhx9-zh_zPfk8hRr1u8SU55CY3UVld?usp=drive_link
+- Estúdio D (~29m² + Camarim): 4,3m de largura x 6,7m de profundidade, com camarim anexo. Planta na Pág 5 do PDF.
+  👉 Fotos D: https://drive.google.com/drive/folders/1D3_KYy--SCczMhx9-qayd0j2v5v0rYwS?usp=drive_link
+*Maior da Aclimação:* Estúdio A (individual) ou a opção AB (combinado).
+
+📍 Unidade Bela Vista (Rua Santa Madalena, 46)
+Todos os estúdios têm 7,2m de profundidade.
+- Estúdio 1 (~37m²): 5,15m de largura x 7,2m de profundidade. É o maior estúdio desta unidade. Planta na Pág 2 do PDF.
+  👉 Fotos 1: https://drive.google.com/drive/folders/1P0Z7xBCZ6gx1OJXZOR_6EWESv3QxIskA?usp=drive_link
+- Estúdio 2 (~30m²): 4,2m de largura x 7,2m de profundidade. Planta na Pág 2 do PDF.
+  👉 Fotos 2: https://drive.google.com/drive/folders/1LyhVa4Jbtjjgve30AIIuVFuK3GBI1Jzn?usp=drive_link
+- Estúdio 3 (~30m²): 4,2m de largura x 7,2m de profundidade. Planta na Pág 2 do PDF.
+  👉 Fotos 3: https://drive.google.com/drive/folders/1f0sG3_R6mUKbXBP0TaGNHg_mJ97L3POP?usp=drive_link
+*Maior da Bela Vista:* Estúdio 1.
 
 📅 AGENDAS ONLINE (Para ver horários livres):
 - Bela Vista: https://www.alugueldeestudiofotografico.com/agenda-estudio-belavista/
 - Aclimação: https://www.alugueldeestudiofotografico.com/agenda-aluguel-de-estudio/
-
-📍 Endereços:
-- Bela Vista: Rua Santa Madalena, 46.
-- Aclimação: Rua Gualaxo, 206.
 
 💰 PREÇOS BASE (Seg-Sex):
 Bela Vista: Est.1 R$70/h | Est.2 R$50/h | Est.3 R$60/h (mín. 2h)
@@ -113,7 +122,6 @@ Se o cliente fechar os dados, gere o JSON:
 async function gerarRespostaGemini(chatId, pergunta, historico = []) {
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   
-  // Monta a memória em formato de texto à prova de falhas
   const historicoTexto = historico.map(msg => 
     `${msg.role === 'user' ? 'Cliente' : 'Assistente'}: ${msg.content}`
   ).join('\n');
@@ -125,7 +133,13 @@ async function gerarRespostaGemini(chatId, pergunta, historico = []) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
-        contents: [{ parts: [{ text: promptCompleto }] }] 
+        contents: [{ parts: [{ text: promptCompleto }] }],
+        safetySettings: [
+          { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+          { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }
+        ]
       }),
     });
 
@@ -133,12 +147,21 @@ async function gerarRespostaGemini(chatId, pergunta, historico = []) {
     
     if (data.error) {
       console.error("Erro da API Gemini:", data.error);
+      if (ADMIN_CHAT_ID) {
+        await sendMessage(ADMIN_CHAT_ID, `⚠️ *ERRO NA INTELIGÊNCIA ARTIFICIAL:*\n\`${data.error.message}\``);
+      }
+      return "Estou passando por uma pequena instabilidade de sistema. Pode tentar novamente em 1 minuto?";
     }
 
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Desculpe, não entendi. Pode repetir?";
+    if (!data.candidates || data.candidates.length === 0) {
+      if (ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `⚠️ *ALERTA:* O Google bloqueou a resposta por causa do Filtro de Segurança.`);
+      return "Desculpe, não consegui formular a resposta para isso. Pode perguntar de outra forma?";
+    }
+
+    return data.candidates[0].content.parts[0].text;
   } catch (error) {
-    console.error("Erro Gemini:", error);
-    return "⚠️ Conexão falhou. Tente novamente.";
+    console.error("Erro Gemini (Fetch):", error);
+    return "⚠️ Minha conexão falhou. Tente novamente.";
   }
 }
 
