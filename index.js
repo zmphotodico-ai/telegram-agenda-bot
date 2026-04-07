@@ -42,7 +42,7 @@ try {
 async function sendMessage(chatId, text) {
   if (!chatId || !text) return;
   try {
-    // 👇 O "ESCUDO": Impede que o Telegram quebre a mensagem por causa dos _ nos links
+    // O "ESCUDO": Impede que o Telegram quebre a mensagem por causa dos _ nos links
     const textoSeguro = text.replace(/_/g, "\\_");
 
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -61,7 +61,7 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// PROMPT REAL DO GEMINI (Atualizado com Plantas e PDF)
+// PROMPT REAL DO GEMINI (Atualizado com Regra de Capacidade)
 // =============================
 const SYSTEM_PROMPT = `
 Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela Vista e Aclimação).
@@ -69,6 +69,7 @@ Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela 
 ⚠️ REGRAS DE OURO:
 1. Respostas CURTAS e OBJETIVAS.
 2. Use o WhatsApp 11 99554-0293 para fechar a reserva ou dúvidas complexas.
+3. Se o cliente perguntar até quantas pessoas pode levar, qual o limite de pessoas ou o tamanho da equipe, responda EXATAMENTE: "Nossa tabela de valores vai somente até 8 pessoas, para mais pessoas por favor entre em contato via WhatsApp 11 99554-0293."
 
 📸 DETALHES TÉCNICOS, FOTOS E PLANTAS (Use para responder sobre tamanhos):
 ⚠️ Quando o cliente perguntar o tamanho ou maior estúdio, forneça as medidas abaixo, o link da foto do estúdio específico e o link do PDF indicando a página da planta. Seja sempre curto.
@@ -104,7 +105,7 @@ Todos os estúdios têm 7,2m de profundidade.
 💰 PREÇOS BASE (Seg-Sex):
 Bela Vista: Est.1 R$70/h | Est.2 R$50/h | Est.3 R$60/h (mín. 2h)
 Aclimação: Est. A, B, C ou D R$70/h | A+B R$100/h (mín. 2h)
-*Valores para 1-2 pessoas. Finais de semana e mais pessoas, consulte.
+*Valores sobem progressivamente até 8 pessoas. Para finais de semana, consulte o humano.
 
 REGRAS: Reserva com 1/3 antecipado via PIX. Estacionamento R$10. Limpeza R$150 se sujar.
 
