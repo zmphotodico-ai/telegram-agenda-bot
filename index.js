@@ -1,5 +1,5 @@
 import express from "express";
-import fetch from "node-fetch"; // Se usar Node 18+, pode remover essa linha
+import fetch from "node-fetch";
 import { google } from "googleapis";
 
 const app = express();
@@ -10,9 +10,9 @@ const TOKEN = process.env.BOT_TOKEN;
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const CALENDAR_ID = "alugueldeestudiofotografico@gmail.com";
 const TIMEZONE = "America/Sao_Paulo";
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "8132670973"; // ID do seu celular para o espião
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "8132670973"; 
 
-const conversationMemory = new Map(); // Memória por chat
+const conversationMemory = new Map(); 
 
 // =============================
 // GOOGLE CALENDAR
@@ -49,6 +49,7 @@ async function sendMessage(chatId, text) {
         chat_id: chatId,
         text,
         parse_mode: "Markdown",
+        disable_web_page_preview: false, // Permitir preview dos links de fotos
       }),
     });
   } catch (error) {
@@ -57,70 +58,60 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// PROMPT REAL DO GEMINI (Curto e Objetivo)
+// PROMPT REAL DO GEMINI (Atualizado com Fotos e Agendas)
 // =============================
 const SYSTEM_PROMPT = `
 Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela Vista e Aclimação).
 
-⚠️ REGRAS DE OURO DA COMUNICAÇÃO (OBRIGATÓRIO):
-1. Responda de forma EXTREMAMENTE CURTA e objetiva. Clientes não gostam de textos longos.
-2. NUNCA envie a tabela de preços inteira de uma vez. Pergunte o que o cliente quer (qual estúdio ou quantas horas) e passe apenas o valor exato.
-3. Vá direto ao ponto, como um atendente humano rápido.
+⚠️ REGRAS DE OURO:
+1. Respostas CURTAS e OBJETIVAS.
+2. Se o cliente pedir fotos, envie o link do estúdio específico que ele perguntou.
+3. Use o WhatsApp 11 99554-0293 para fechar a reserva ou dúvidas complexas.
 
-INFORMAÇÕES IMPORTANTES:
+📸 LINKS DE FOTOS (Envie apenas o solicitado):
+- Aclimação (Geral): https://drive.google.com/drive/folders/100GPqd9sWFRtEE5YPZCYhyv_DkBNV_G9?usp=drive_link
+  • Estúdio A: https://drive.google.com/drive/folders/19SQObRdLLXiPw-3p3AfWWHRU0BHxG3BE?usp=drive_link
+  • Estúdio B: https://drive.google.com/drive/folders/14IJ64PDgfBm-Z1cnB-vlDRxQ5j9NQXYm?usp=drive_link
+  • Estúdio AB: https://drive.google.com/drive/folders/1vfQ4IU8TCvDyBjMge0xUBKUXNEKxHe8I?usp=drive_link
+  • Estúdio C: https://drive.google.com/drive/folders/12OHhx9-zh_zPfk8hRr1u8SU55CY3UVld?usp=drive_link
+  • Estúdio D: https://drive.google.com/drive/folders/1D3_KYy--SCczMhx9-qayd0j2v5v0rYwS?usp=drive_link
+
+- Bela Vista (Geral): https://drive.google.com/drive/folders/1Navk6o2Gy9cDlD9FKAuizH8hd3nTMLEW?usp=drive_link
+  • Estúdio 1: https://drive.google.com/drive/folders/1P0Z7xBCZ6gx1OJXZOR_6EWESv3QxIskA?usp=drive_link
+  • Estúdio 2: https://drive.google.com/drive/folders/1LyhVa4Jbtjjgve30AIIuVFuK3GBI1Jzn?usp=drive_link
+  • Estúdio 3: https://drive.google.com/drive/folders/1f0sG3_R6mUKbXBP0TaGNHg_mJ97L3POP?usp=drive_link
+
+📅 AGENDAS ONLINE (Para ver horários livres):
+- Bela Vista: https://www.alugueldeestudiofotografico.com/agenda-estudio-belavista/
+- Aclimação: https://www.alugueldeestudiofotografico.com/agenda-aluguel-de-estudio/
 
 📍 Endereços:
-- Bela Vista: Rua Santa Madalena, 46 - Bela Vista/Liberdade (Estúdios 1, 2 e 3)
-- Aclimação: Rua Gualaxo, 206 - Aclimação/Liberdade (Estúdios A, B, C e D)
+- Bela Vista: Rua Santa Madalena, 46.
+- Aclimação: Rua Gualaxo, 206.
 
-💰 TABELAS DE PREÇO (por hora):
-Bela Vista - Segunda a Sexta (mínimo 2h):
-• Est. 1: 1-2p=R$70 | 3-5p=R$80 | 6-8p=R$100
-• Est. 2: 1-2p=R$50 | 3-5p=R$60 | 6-8p=R$80
-• Est. 3: 1-2p=R$60 | 3-5p=R$70 | 6-8p=R$90
+💰 PREÇOS BASE (Seg-Sex):
+Bela Vista: Est.1 R$70/h | Est.2 R$50/h | Est.3 R$60/h (mín. 2h)
+Aclimação: Est. A, B, C ou D R$70/h | A+B R$100/h (mín. 2h)
+*Valores para 1-2 pessoas. Finais de semana e mais pessoas, consulte.
 
-Bela Vista - Fim de semana/Feriado (mínimo 4h):
-• Est. 1: 1-2p=R$80 | 3-5p=R$90 | 6-8p=R$110
-• Est. 2: 1-2p=R$70 | 3-5p=R$80 | 6-8p=R$100
-• Est. 3: 1-2p=R$80 | 3-5p=R$80 | 6-8p=R$100
+REGRAS: Reserva com 1/3 antecipado via PIX. Estacionamento R$10. Limpeza R$150 se sujar.
 
-Aclimação - Segunda a Sexta (mínimo 2h):
-• Est. A ou B: 1-2p=R$70 | 3-5p=R$80 | 6-8p=R$100
-• A+B juntos: 1-2p=R$100 | 3-5p=R$110 | 6-8p=R$130
-• Est. C ou D: 1-2p=R$70 | 3-5p=R$80 | 6-8p=R$100
-
-Aclimação - Fim de semana/Feriado (mínimo 3h):
-• Est. A ou B: 1-2p=R$80 | 3-5p=R$90 | 6-8p=R$110
-• A+B juntos: 1-2p=R$110 | 3-5p=R$120 | 6-8p=R$140
-• Est. C: 1-2p=R$80 | 3-5p=R$90 | 6-8p=R$110
-• Est. D: 1-2p=R$80 | 3-5p=R$90 | 6-8p=R$100
-
-REGRAS DO ESTÚDIO:
-- Reserva só com pagamento de 1/3 antecipado via PIX.
-- Acima de 8 pessoas = valor a combinar.
-- Gravação com áudio = obrigatório alugar os 3 estúdios da Bela Vista OU os 2 da Aclimação.
-- Estacionamento R$10 por período. Taxa de limpeza R$150 se entregar sujo.
-- Não pisar na curva do fundo infinito. Não usar motor-drive.
-
-ITENS INCLUSOS: Fundo branco infinito + 2 flashes ou 2 tochas LED + rádio flash.
-
-Se o cliente confirmar TODOS os dados para agendar (nome, telefone, data, horário, estúdio, quantidade de pessoas e duração), responda APENAS com o JSON abaixo dentro de \`\`\`json ... \`\`\`:
+Se o cliente fechar os dados, gere o JSON:
 \`\`\`json
 {
   "nome": "João Silva",
   "telefone": "11987654321",
   "data": "2026-04-20",
   "hora_inicio": "14:00",
-  "duracao_minutos": 180,
+  "duracao_minutos": 120,
   "estudio": "Estúdio 1 - Bela Vista",
-  "qtd_pessoas": 3
+  "qtd_pessoas": 2
 }
 \`\`\`
 `;
 
 async function gerarRespostaGemini(chatId, pergunta, historico = []) {
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-
   const contentsArray = [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }];
   
   historico.forEach(msg => {
@@ -143,7 +134,7 @@ async function gerarRespostaGemini(chatId, pergunta, historico = []) {
     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Desculpe, não entendi. Pode repetir?";
   } catch (error) {
     console.error("Erro Gemini:", error);
-    return "⚠️ Minha conexão falhou. Tente novamente em alguns segundos.";
+    return "⚠️ Conexão falhou. Tente novamente.";
   }
 }
 
@@ -160,7 +151,7 @@ async function criarEvento(dados, chatId) {
       calendarId: CALENDAR_ID,
       resource: {
         summary: `${dados.hora_inicio}-${horaFim} / ${dados.estudio} PRE`,
-        description: `Cliente: ${dados.nome}\nTelefone: ${dados.telefone}\nChatId: ${chatId}\nPessoas: ${dados.qtd_pessoas}\nEstúdio: ${dados.estudio}\nDuração: ${dados.duracao_minutos} min`,
+        description: `Cliente: ${dados.nome}\nTelefone: ${dados.telefone}\nChatId: ${chatId}\nPessoas: ${dados.qtd_pessoas}\nEstúdio: ${dados.estudio}`,
         start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
         end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
       },
@@ -174,7 +165,7 @@ async function criarEvento(dados, chatId) {
 }
 
 // =============================
-// VERIFICAR PRÉ-RESERVAS PENDENTES (a cada 12h)
+// VERIFICAR PRÉ-RESERVAS (a cada 12h)
 // =============================
 async function verificarPreReservas() {
   const agora = new Date();
@@ -188,33 +179,24 @@ async function verificarPreReservas() {
 
     for (const ev of res.data.items || []) {
       if (!ev.summary?.includes("PRE")) continue;
-
       const desc = ev.description || "";
       const chatIdMatch = desc.match(/ChatId:\s*(.*)/);
-      const nomeMatch = desc.match(/Cliente:\s*(.*)/);
-
       if (!chatIdMatch) continue;
 
       const chatId = chatIdMatch[1].trim();
-      const nome = nomeMatch ? nomeMatch[1].trim() : "Cliente";
-
       const criado = new Date(ev.created);
       const horasPassadas = (agora - criado) / 3600000;
 
       if (horasPassadas >= 12 && horasPassadas < 24) {
-        await sendMessage(chatId, `Olá ${nome}, sua pré-reserva ainda está pendente 😊\n\nPara confirmar a data, precisamos do envio do comprovante do PIX.`);
+        await sendMessage(chatId, `Sua pré-reserva está pendente 😊 Precisamos do PIX para confirmar.`);
       }
-
       if (horasPassadas >= 24) {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
-        await sendMessage(chatId, `⚠️ ${nome}, sua pré-reserva foi cancelada automaticamente por falta do comprovante de pagamento do sinal. Se desejar uma nova data, estou à disposição!`);
+        await sendMessage(chatId, `⚠️ Pré-reserva cancelada por falta de pagamento.`);
       }
     }
-  } catch (error) {
-    console.error("Erro ao verificar pré-reservas:", error);
-  }
+  } catch (error) { console.error(error); }
 }
-
 setInterval(verificarPreReservas, 12 * 60 * 60 * 1000);
 
 // =============================
@@ -230,7 +212,7 @@ app.post("/webhook", async (req, res) => {
 
     if (!chatId || !texto) return;
 
-    // 🕵️ MODO ESPIÃO - Cliente enviou mensagem
+    // 🕵️ MODO ESPIÃO - Cliente enviou
     if (String(chatId) !== ADMIN_CHAT_ID) {
       await sendMessage(ADMIN_CHAT_ID, `👤 *${nomeUsuario}:* ${texto}`);
     }
@@ -253,39 +235,24 @@ app.post("/webhook", async (req, res) => {
     if (jsonMatch) {
       const dados = JSON.parse(jsonMatch[1]);
       await sendMessage(chatId, "Verificando a agenda... ⏳");
-      
       const eventId = await criarEvento(dados, chatId);
 
       if(eventId) {
-          const msgSucesso = `✅ *Pré-reserva criada com sucesso!*\nEstúdio: ${dados.estudio}\nData: ${dados.data} às ${dados.hora_inicio}\n\nPara oficializarmos na agenda, faça o pagamento do sinal (1/3 do valor) e envie o comprovante para nosso atendimento humano.\n\n📱 *WhatsApp:* 11 99554-0293\n🔑 *PIX CNPJ:* 43.345.289/0001-93`;
-          
+          const msgSucesso = `✅ *Pré-reserva criada!*\nEstúdio: ${dados.estudio}\nData: ${dados.data} às ${dados.hora_inicio}\n\nPIX (1/3): 43.345.289/0001-93\nWhatsApp: 11 99554-0293`;
           await sendMessage(chatId, msgSucesso);
-          
-          // 🕵️ MODO ESPIÃO - Bot (Confirmação de Reserva)
-          if (String(chatId) !== ADMIN_CHAT_ID) {
-            await sendMessage(ADMIN_CHAT_ID, `🎉 *RESERVA FEITA PELO BOT:*\n${msgSucesso}`);
-          }
-
-          conversationMemory.set(chatId, []); // Limpa histórico
+          if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🎉 *RESERVA:* ${msgSucesso}`);
+          conversationMemory.set(chatId, []); 
       } else {
-          const msgErro = "❌ Ops! Tive um problema ao salvar na agenda. Pode confirmar o horário de novo?";
-          await sendMessage(chatId, msgErro);
-          if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🤖 *Bot:* ${msgErro}`);
+          await sendMessage(chatId, "Erro ao salvar na agenda.");
       }
     } else {
       await sendMessage(chatId, respostaSemJson);
-      
-      // 🕵️ MODO ESPIÃO - Bot (Conversa Normal)
+      // 🕵️ MODO ESPIÃO - Bot respondeu
       if (String(chatId) !== ADMIN_CHAT_ID && respostaSemJson) {
         await sendMessage(ADMIN_CHAT_ID, `🤖 *Bot:* ${respostaSemJson}`);
       }
     }
-  } catch (error) {
-    console.error("Erro no webhook:", error);
-  }
+  } catch (error) { console.error(error); }
 });
 
-// =============================
-app.listen(PORT, () => {
-  console.log(`🚀 Bot Zemaria rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Bot rodando na porta ${PORT}`));
