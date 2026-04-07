@@ -248,7 +248,11 @@ async function gerarRespostaGemini(chatId, agendaSemana, pergunta) {
 
   const hoje = new Date().toLocaleDateString("pt-BR", { timeZone: TIMEZONE });
 
-  const promptSistema = `Você é o assistente da Zemaria Produções Fotográficas. Responda de forma CURTA, clara e profissional.
+  const promptSistema = `Você é o assistente do "Aluguel de Estúdio Fotográfico". Responda de forma CURTA, clara e profissional.
+
+REDES SOCIAIS E SITE (Envie APENAS se o cliente pedir):
+- Instagram: https://instagram.com/alugueldeestudiofotografico
+- Site: https://alugueldeestudiofotografico.com/
 
 Endereços: Aclimação (Rua Gualaxos 206) | Bela Vista (Rua Santa Madalena 46).
 
@@ -258,7 +262,8 @@ PREÇOS (mín. 2h seg-sex / 3-4h fins de semana):
 - Diária 12h: cobre 10h efetivas
 - >8 pessoas ou madrugadas: Sob consulta (WhatsApp 11 995540293)
 
-Peça 1/3 de sinal via PIX CNPJ 43.345.289/0001-93.
+Para faturamento e pré-reserva, a empresa responsável é a Zemaria Produções Fotográficas.
+Peça 1/3 de sinal via PIX CNPJ 43.345.289/0001-93 (Zemaria Produções Fotográficas LTDA).
 
 Hoje: ${hoje}
 Agenda próxima semana:\n${agendaSemana}
@@ -387,7 +392,6 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// A LINHA SALVADORA!
 app.listen(PORT, () => {
   console.log(`🚀 Bot Zemaria rodando na porta ${PORT}`);
 });
