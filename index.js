@@ -49,7 +49,7 @@ async function sendMessage(chatId, text) {
         chat_id: chatId,
         text,
         parse_mode: "Markdown",
-        disable_web_page_preview: false, // Permitir preview dos links de fotos
+        disable_web_page_preview: false, 
       }),
     });
   } catch (error) {
@@ -65,7 +65,7 @@ Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela 
 
 ⚠️ REGRAS DE OURO:
 1. Respostas CURTAS e OBJETIVAS.
-2. Se o cliente pedir fotos, envie o link do estúdio específico que ele perguntou.
+2. Se o cliente pedir fotos, envie o link do estúdio específico que ele perguntou. Se for geral, mande os links gerais.
 3. Use o WhatsApp 11 99554-0293 para fechar a reserva ou dúvidas complexas.
 
 📸 LINKS DE FOTOS (Envie apenas o solicitado):
@@ -112,25 +112,29 @@ Se o cliente fechar os dados, gere o JSON:
 
 async function gerarRespostaGemini(chatId, pergunta, historico = []) {
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-  const contentsArray = [{ role: "user", parts: [{ text: SYSTEM_PROMPT }] }];
   
-  historico.forEach(msg => {
-     contentsArray.push({
-         role: msg.role === "user" ? "user" : "model",
-         parts: [{ text: msg.content }]
-     });
-  });
+  // Monta a memória em formato de texto à prova de falhas
+  const historicoTexto = historico.map(msg => 
+    `${msg.role === 'user' ? 'Cliente' : 'Assistente'}: ${msg.content}`
+  ).join('\n');
 
-  contentsArray.push({ role: "user", parts: [{ text: `Cliente: ${pergunta}` }] });
+  const promptCompleto = `${SYSTEM_PROMPT}\n\n[HISTÓRICO]\n${historicoTexto}\n\nCliente: ${pergunta}`;
 
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: contentsArray }),
+      body: JSON.stringify({ 
+        contents: [{ parts: [{ text: promptCompleto }] }] 
+      }),
     });
 
     const data = await res.json();
+    
+    if (data.error) {
+      console.error("Erro da API Gemini:", data.error);
+    }
+
     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Desculpe, não entendi. Pode repetir?";
   } catch (error) {
     console.error("Erro Gemini:", error);
