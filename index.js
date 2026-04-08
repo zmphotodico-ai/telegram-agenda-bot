@@ -60,7 +60,7 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// PROMPT REAL DO GEMINI (Dinâmico com Relógio e Regra de Intervalo)
+// PROMPT REAL DO GEMINI (Dinâmico + Matemática de Preços)
 // =============================
 async function gerarRespostaGemini(chatId, pergunta, historico = []) {
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
@@ -90,7 +90,7 @@ Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela 
 
 PASSO A PASSO PARA RESERVAR:
 Se o cliente quiser reservar, pergunte o que faltar: Nome completo, Telefone, Data, Horário de Início, Qual Estúdio, Quantidade de Pessoas e Duração (pergunte por "quantidade de horas", "horas e meia" ou "horário de término", nunca peça minutos).
-Assim que ele confirmar TUDO, calcule a duração pedida e converta para minutos (ex: 2 horas = 120, 2 horas e meia = 150). Não fale mais nada, apenas gere o JSON abaixo:
+Assim que ele confirmar TUDO, calcule a duração pedida e converta para minutos (ex: 2h = 120). Calcule o VALOR TOTAL multiplicando o preço/hora (com as regras abaixo) pelas horas locadas. Não fale mais nada, apenas gere o JSON:
 \`\`\`json
 {
   "nome": "João Silva",
@@ -99,7 +99,8 @@ Assim que ele confirmar TUDO, calcule a duração pedida e converta para minutos
   "hora_inicio": "14:00",
   "duracao_minutos": 150,
   "estudio": "Estúdio 1 - Bela Vista",
-  "qtd_pessoas": 2
+  "qtd_pessoas": 2,
+  "valor_total": 210
 }
 \`\`\`
 
@@ -131,14 +132,14 @@ Assim que ele confirmar TUDO, calcule a duração pedida e converta para minutos
 - Bela Vista: https://www.alugueldeestudiofotografico.com/agenda-estudio-belavista/
 - Aclimação: https://www.alugueldeestudiofotografico.com/agenda-aluguel-de-estudio/
 
-💰 PREÇOS BASE (Por Hora, para 1-2 pessoas):
+💰 TABELA DE PREÇOS BASE (Por Hora, para 1-2 pessoas):
 - Bela Vista (Seg-Sex, mín 2h): Est.1 R$70 | Est.2 R$50 | Est.3 R$60
 - Bela Vista (Fim de semana, mín 4h): Est.1 R$80 | Est.2 R$70 | Est.3 R$80
 - Aclimação (Seg-Sex, mín 2h): Est. A, B, C ou D R$70 | A+B R$100
 - Aclimação (Fim de semana, mín 3h): Est. A, B, C ou D R$80 | A+B R$110
-*Valores sobem progressivamente até 8 pessoas.
+*REGRAS DE VALOR: Adicione +R$10/hora no valor base se for de 3 a 5 pessoas. Adicione +R$30/hora no valor base se for de 6 a 8 pessoas.
 
-REGRAS: Reserva com 1/3 antecipado via PIX. Estacionamento R$10. Limpeza R$150 se sujar.
+REGRAS GERAIS: Reserva confirmada com PIX de 1/3 do total antecipado. Estacionamento R$10. Limpeza R$150 se sujar.
 `;
 
   const historicoTexto = historico.map(msg => 
@@ -197,7 +198,7 @@ async function criarEvento(dados, chatId) {
       calendarId: CALENDAR_ID,
       resource: {
         summary: `${dados.hora_inicio}-${horaFim} / ${dados.estudio} PRE`,
-        description: `Cliente: ${dados.nome}\nTelefone: ${dados.telefone}\nChatId: ${chatId}\nPessoas: ${dados.qtd_pessoas}\nEstúdio: ${dados.estudio}`,
+        description: `Cliente: ${dados.nome}\nTelefone: ${dados.telefone}\nChatId: ${chatId}\nPessoas: ${dados.qtd_pessoas}\nEstúdio: ${dados.estudio}\nValor Total: R$${dados.valor_total || 'Não calculado'}`,
         start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
         end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
       },
@@ -284,9 +285,24 @@ app.post("/webhook", async (req, res) => {
       const eventId = await criarEvento(dados, chatId);
 
       if(eventId) {
-          const msgSucesso = `✅ *Pré-reserva criada!*\nEstúdio: ${dados.estudio}\nData: ${dados.data} às ${dados.hora_inicio}\n\nPIX (1/3): 43.345.289/0001-93\nWhatsApp: 11 99554-0293`;
+          // Lógica de Formatação da Mensagem Final
+          const start = new Date(`${dados.data}T${dados.hora_inicio}:00-03:00`);
+          const end = new Date(start.getTime() + dados.duracao_minutos * 60000);
+
+          const opcoesData = { weekday: 'long', day: 'numeric', month: 'short', timeZone: TIMEZONE };
+          const dataFormatada = start.toLocaleDateString("pt-BR", opcoesData).replace(".", "");
+
+          const horaInicioStr = start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE });
+          const horaFimStr = end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: TIMEZONE });
+
+          const valorTotal = dados.valor_total || 0;
+          const valorSinal = Math.ceil(valorTotal / 3);
+
+          const msgSucesso = `Pré marcado ${dados.estudio} ${dataFormatada} · ${horaInicioStr} – ${horaFimStr}\nreserva para ${dados.qtd_pessoas} pessoas valor total R$${valorTotal}\nPara fazer a reserva pedimos 1/3 r$${valorSinal} antecipado ok?\nPIX/CNPJ\nZmphoto@zmphoto.com.br\n43.345.289/0001-93\nZemaria Produções Fotográficas LTDA`;
+          
           await sendMessage(chatId, msgSucesso);
-          if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🎉 *RESERVA:* ${msgSucesso}`);
+          if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🎉 *NOVA RESERVA REGISTRADA NA AGENDA:* \n\n${msgSucesso}`);
+          
           conversationMemory.set(chatId, []); 
       } else {
           await sendMessage(chatId, "Erro ao salvar na agenda.");
