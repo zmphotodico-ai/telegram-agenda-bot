@@ -60,29 +60,44 @@ async function sendMessage(chatId, text) {
 }
 
 // =============================
-// PROMPT REAL DO GEMINI (Atualizado - Fim de Semana Liberado)
+// PROMPT REAL DO GEMINI (Dinâmico com Relógio e Regra de Intervalo)
 // =============================
-const SYSTEM_PROMPT = `
+async function gerarRespostaGemini(chatId, pergunta, historico = []) {
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+  
+  const dataAtual = new Date();
+  const dataHojeStr = dataAtual.toLocaleDateString("pt-BR", { timeZone: TIMEZONE });
+  const diaSemana = dataAtual.toLocaleDateString("pt-BR", { weekday: 'long', timeZone: TIMEZONE });
+  const anoAtual = dataAtual.getFullYear();
+
+  const SYSTEM_PROMPT = `
 Você é o assistente virtual oficial do Aluguel de Estúdio Fotográfico (Bela Vista e Aclimação).
 
+⏳ INFORMAÇÃO DE TEMPO E REGRAS DE AGENDA:
+- Hoje é ${diaSemana}, ${dataHojeStr}. O ano atual é ${anoAtual}.
+- Se o cliente pedir "amanhã", "depois de amanhã" ou um dia da semana (ex: "sexta"), CALCULE A DATA VOCÊ MESMO com base no dia de hoje.
+- NUNCA pergunte "qual é a data exata para amanhã". Calcule mentalmente.
+- 🕒 HORAS QUEBRADAS: O cliente pode pedir horas quebradas (ex: 2 horas e meia).
+- 🛑 REGRA DO INTERVALO: Sempre avise o cliente que é OBRIGATÓRIO ter 30 minutos (meia hora) de intervalo livre entre a reserva dele e qualquer outra que já exista na agenda do estúdio. Peça para ele checar isso nos links da agenda.
+
 ⚠️ REGRAS DE OURO DA SUA INTELIGÊNCIA:
-1. Respostas CURTAS e OBJETIVAS.
-2. VOCÊ FAZ A PRÉ-RESERVA TODOS OS DIAS! Se o pedido for entre as 08:00 e as 21:00 e para ATÉ 8 PESSOAS, recolha os dados e agende (válido para segunda a sexta E também finais de semana).
+1. Respostas CURTAS e OBJETIVAS. Pergunte as coisas de forma natural.
+2. VOCÊ FAZ A PRÉ-RESERVA TODOS OS DIAS! Se o pedido for entre as 08:00 e as 21:00 e para ATÉ 8 PESSOAS, recolha os dados e agende.
 3. MANDE PARA O WHATSAPP (11 99554-0293) EXCLUSIVAMENTE nestes 3 casos:
    - Mais de 8 pessoas (Responda EXATAMENTE: "Nossa tabela de valores vai somente até 8 pessoas, para mais pessoas por favor entre em contato via WhatsApp 11 99554-0293.").
    - Horários de início antes das 08h ou término depois das 21h.
    - Dúvidas complexas que você não saiba responder.
 
 PASSO A PASSO PARA RESERVAR:
-Se o cliente quiser reservar, pergunte o que faltar: Nome completo, Telefone, Data, Horário de Início, Duração (minutos), Qual Estúdio e Quantidade de Pessoas.
-Assim que ele confirmar TUDO, não fale mais nada, apenas gere o JSON abaixo:
+Se o cliente quiser reservar, pergunte o que faltar: Nome completo, Telefone, Data, Horário de Início, Qual Estúdio, Quantidade de Pessoas e Duração (pergunte por "quantidade de horas", "horas e meia" ou "horário de término", nunca peça minutos).
+Assim que ele confirmar TUDO, calcule a duração pedida e converta para minutos (ex: 2 horas = 120, 2 horas e meia = 150). Não fale mais nada, apenas gere o JSON abaixo:
 \`\`\`json
 {
   "nome": "João Silva",
   "telefone": "11987654321",
-  "data": "2026-04-20",
+  "data": "YYYY-MM-DD",
   "hora_inicio": "14:00",
-  "duracao_minutos": 120,
+  "duracao_minutos": 150,
   "estudio": "Estúdio 1 - Bela Vista",
   "qtd_pessoas": 2
 }
@@ -126,9 +141,6 @@ Assim que ele confirmar TUDO, não fale mais nada, apenas gere o JSON abaixo:
 REGRAS: Reserva com 1/3 antecipado via PIX. Estacionamento R$10. Limpeza R$150 se sujar.
 `;
 
-async function gerarRespostaGemini(chatId, pergunta, historico = []) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-  
   const historicoTexto = historico.map(msg => 
     `${msg.role === 'user' ? 'Cliente' : 'Assistente'}: ${msg.content}`
   ).join('\n');
@@ -157,18 +169,18 @@ async function gerarRespostaGemini(chatId, pergunta, historico = []) {
       if (ADMIN_CHAT_ID) {
         await sendMessage(ADMIN_CHAT_ID, `⚠️ *ERRO NA INTELIGÊNCIA ARTIFICIAL:*\n\`${data.error.message}\``);
       }
-      return "Estou a passar por uma pequena instabilidade de sistema. Pode tentar novamente num minuto?";
+      return "Estou passando por uma pequena instabilidade de sistema. Pode tentar novamente em 1 minuto?";
     }
 
     if (!data.candidates || data.candidates.length === 0) {
-      if (ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `⚠️ *ALERTA:* O Google bloqueou a resposta devido ao Filtro de Segurança.`);
+      if (ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `⚠️ *ALERTA:* O Google bloqueou a resposta por causa do Filtro de Segurança.`);
       return "Desculpe, não consegui formular a resposta para isso. Pode perguntar de outra forma?";
     }
 
     return data.candidates[0].content.parts[0].text;
   } catch (error) {
     console.error("Erro Gemini (Fetch):", error);
-    return "⚠️ A minha ligação falhou. Tente novamente.";
+    return "⚠️ Minha conexão falhou. Tente novamente.";
   }
 }
 
@@ -222,7 +234,7 @@ async function verificarPreReservas() {
       const horasPassadas = (agora - criado) / 3600000;
 
       if (horasPassadas >= 12 && horasPassadas < 24) {
-        await sendMessage(chatId, `A sua pré-reserva está pendente 😊 Precisamos do PIX para confirmar.`);
+        await sendMessage(chatId, `Sua pré-reserva está pendente 😊 Precisamos do PIX para confirmar.`);
       }
       if (horasPassadas >= 24) {
         await calendar.events.delete({ calendarId: CALENDAR_ID, eventId: ev.id });
@@ -268,7 +280,7 @@ app.post("/webhook", async (req, res) => {
 
     if (jsonMatch) {
       const dados = JSON.parse(jsonMatch[1]);
-      await sendMessage(chatId, "A verificar a agenda... ⏳");
+      await sendMessage(chatId, "Verificando a agenda... ⏳");
       const eventId = await criarEvento(dados, chatId);
 
       if(eventId) {
@@ -277,7 +289,7 @@ app.post("/webhook", async (req, res) => {
           if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🎉 *RESERVA:* ${msgSucesso}`);
           conversationMemory.set(chatId, []); 
       } else {
-          await sendMessage(chatId, "Erro ao guardar na agenda.");
+          await sendMessage(chatId, "Erro ao salvar na agenda.");
       }
     } else {
       await sendMessage(chatId, respostaSemJson);
@@ -289,4 +301,4 @@ app.post("/webhook", async (req, res) => {
   } catch (error) { console.error(error); }
 });
 
-app.listen(PORT, () => console.log(`🚀 Bot a correr na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Bot rodando na porta ${PORT}`));
