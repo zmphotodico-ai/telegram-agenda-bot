@@ -13,6 +13,7 @@ const TIMEZONE = "America/Sao_Paulo";
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || "8132670973"; 
 
 const conversationMemory = new Map(); 
+const userProfiles = new Map(); // Caderneta de Clientes (CRM)
 
 // =============================
 // GOOGLE CALENDAR
@@ -42,7 +43,6 @@ try {
 async function sendMessage(chatId, text) {
   if (!chatId || !text) return;
   try {
-    // REMOVIDO o parse_mode. Texto puro nunca trava o Telegram e os links ficam clicáveis!
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -68,7 +68,7 @@ async function getAgendaOcupada() {
       orderBy: 'startTime',
     });
     
-    if (!res.data.items || res.data.items.length === 0) return "A agenda está totalmente livre.";
+    if (!res.data.items || res.data.items.length === 0) return "Nenhuma reserva encontrada. Todos os estúdios estão livres.";
 
     return res.data.items.map(ev => {
       const inicio = new Date(ev.start.dateTime || ev.start.date);
@@ -81,7 +81,7 @@ async function getAgendaOcupada() {
 // =============================
 // CÉREBRO DO ROBÔ (GEMINI)
 // =============================
-async function gerarRespostaGemini(chatId, pergunta, historico = []) {
+async function gerarRespostaGemini(chatId, pergunta, historico = [], nomeUsuario = "Cliente") {
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
   
   const dataAtual = new Date();
@@ -90,8 +90,15 @@ async function gerarRespostaGemini(chatId, pergunta, historico = []) {
   const anoAtual = dataAtual.getFullYear();
   const ocupacaoAtual = await getAgendaOcupada();
 
+  const perfil = userProfiles.get(chatId);
+  const infoPerfil = perfil 
+    ? `\nVocê já tem o cadastro deste cliente! Nome completo: ${perfil.nome} | Telefone: ${perfil.telefone}. NÃO pergunte nome e telefone para fazer a reserva, puxe da sua memória e use no JSON.` 
+    : ``;
+
   const SYSTEM_PROMPT = `
 Você é o assistente oficial do Aluguel de Estúdio Fotográfico (Aclimação e Bela Vista).
+
+👤 CLIENTE ATUAL: O nome dele no Telegram é ${nomeUsuario}. Se for uma saudação, diga "Oi ${nomeUsuario}, como posso te ajudar hoje?".${infoPerfil}
 
 ⏳ TEMPO E AGENDA:
 - Hoje é ${diaSemana}, ${dataHojeStr}. Ano ${anoAtual}. Calcule as datas mentalmente.
@@ -99,13 +106,13 @@ Você é o assistente oficial do Aluguel de Estúdio Fotográfico (Aclimação e
 ${ocupacaoAtual}
 
 ⚠️ REGRAS DE OURO:
-1. Se o cliente pedir um horário já ocupado, avise-o imediatamente e sugira outro.
-2. Obrigatório 30 min de intervalo livre entre reservas.
+1. OS ESTÚDIOS SÃO INDEPENDENTES! Vários estúdios podem ser alugados no mesmo horário. Só diga que está ocupado se o cliente pedir EXATAMENTE o mesmo estúdio que já consta como ocupado na lista acima.
+2. Obrigatório 30 min de intervalo livre entre reservas do MESMO estúdio.
 3. Respostas CURTAS. Não use formatações como asteriscos.
 4. WHATSAPP (11 99554-0293) SÓ PARA: Mais de 8 pessoas, madrugadas/antes das 8h, ou dúvidas complexas.
 
 PASSO A PASSO DA RESERVA:
-Pergunte o que faltar: Nome, Telefone, Data, Início, Duração (horas), Estúdio e Pessoas.
+Pergunte o que faltar: Data, Início, Duração (horas), Estúdio e Pessoas. (Se você não tiver na memória, peça Nome Completo e Telefone).
 Confirmado tudo, calcule o valor total e gere SOMENTE o JSON:
 \`\`\`json
 {
@@ -186,7 +193,24 @@ async function criarEvento(dados, chatId) {
       singleEvents: true,
     });
 
-    if (conflito.data.items.length > 0) return { erro: "conflito" };
+    // 👇 NOVA REGRA: Verifica se a reserva que já existe é para o MESMO estúdio
+    const temConflitoNoMesmoEstudio = conflito.data.items.some(ev => {
+      const resumo = (ev.summary || "").toLowerCase();
+      const desc = (ev.description || "").toLowerCase();
+      const textoEvento = resumo + " " + desc;
+      const estudioDesejado = (dados.estudio || "").toLowerCase();
+
+      // Impede sobreposição entre os Estúdios A, B e AB
+      if (estudioDesejado.includes("estúdio ab")) {
+         return textoEvento.includes("estúdio a") || textoEvento.includes("estúdio b");
+      }
+      if (estudioDesejado.includes("estúdio a") && textoEvento.includes("estúdio ab")) return true;
+      if (estudioDesejado.includes("estúdio b") && textoEvento.includes("estúdio ab")) return true;
+
+      return textoEvento.includes(estudioDesejado);
+    });
+
+    if (temConflitoNoMesmoEstudio) return { erro: "conflito" };
 
     const response = await calendar.events.insert({
       calendarId: CALENDAR_ID,
@@ -249,7 +273,7 @@ app.post("/webhook", async (req, res) => {
     if (!conversationMemory.has(chatId)) conversationMemory.set(chatId, []);
     const historico = conversationMemory.get(chatId);
 
-    const resposta = await gerarRespostaGemini(chatId, texto, historico);
+    const resposta = await gerarRespostaGemini(chatId, texto, historico, nomeUsuario);
 
     // ATUALIZA A MEMÓRIA
     historico.push({ role: "user", content: texto });
@@ -266,10 +290,13 @@ app.post("/webhook", async (req, res) => {
       const resultado = await criarEvento(dados, chatId);
 
       if (resultado?.erro === "conflito") {
-        const msgConflito = "⚠️ Poxa, acabei de checar e esse horário já está ocupado ou não tem o intervalo de 30 minutos necessário! Poderia escolher outro horário ou estúdio?";
+        const msgConflito = "⚠️ Poxa, acabei de checar e esse horário já está ocupado neste estúdio (ou não tem o intervalo necessário)! Poderia escolher outro horário ou outro estúdio livre?";
         await sendMessage(chatId, msgConflito);
         if (String(chatId) !== ADMIN_CHAT_ID) await sendMessage(ADMIN_CHAT_ID, `🤖 Bot: ${msgConflito}`);
       } else if (resultado) {
+        
+        userProfiles.set(chatId, { nome: dados.nome, telefone: dados.telefone });
+
         const start = new Date(`${dados.data}T${dados.hora_inicio}:00-03:00`);
         const end = new Date(start.getTime() + dados.duracao_minutos * 60000);
 
