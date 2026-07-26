@@ -217,6 +217,48 @@ function extrairEstudio(ev) {
   return null; // não reconhecido
 }
 
+// ============================================================
+// 🆕 FORMATADORES DE EXIBIÇÃO (agenda/vagos legíveis)
+// ============================================================
+
+// transforma o código do estúdio em algo legível: "Estúdio B (Aclimação)"
+function rotuloEstudioCodigo(est) {
+  if (!est) return "Estúdio não identificado";
+  const ag = agendaDoEstudio(est);
+  return ag ? `Estúdio ${est} (${ag.unidade})` : `Estúdio ${est}`;
+}
+
+// mesmo rótulo, mas a partir do evento (extrai o estúdio do título)
+function rotuloEstudioEvento(ev) {
+  return rotuloEstudioCodigo(extrairEstudio(ev));
+}
+
+// formata uma lista de eventos agrupada por dia:
+// 📅 sábado, 26/07
+//   08:30–17:00 · Estúdio 1 (Bela Vista)
+function formatarAgendaPorDia(eventos) {
+  const grupos = {};
+  for (const ev of eventos) {
+    const ini = new Date(ev.start.dateTime || ev.start.date);
+    const chave = ini.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // YYYY-MM-DD
+    (grupos[chave] = grupos[chave] || []).push(ev);
+  }
+  return Object.keys(grupos).sort().map(chave => {
+    const doDia = grupos[chave].sort((a, b) =>
+      new Date(a.start.dateTime || a.start.date) - new Date(b.start.dateTime || b.start.date));
+    const ini0 = new Date(doDia[0].start.dateTime || doDia[0].start.date);
+    const cabecalho = ini0.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long", day: "2-digit", month: "2-digit" });
+    const linhas = doDia.map(ev => {
+      const ei = new Date(ev.start.dateTime || ev.start.date);
+      const ef = new Date(ev.end.dateTime || ev.end.date);
+      const hi = ei.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
+      const hf = ef.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
+      return `  ${hi}–${hf} · ${rotuloEstudioEvento(ev)}`;
+    }).join("\n");
+    return `📅 *${cabecalho}*\n${linhas}`;
+  }).join("\n\n");
+}
+
 // TABELA DE VALORES POR HORA — faixa fixa de 3 a 5 pessoas
 // (o restante é cobrado no dia). semana = seg-sex | fds = sáb, dom e feriado
 const TABELA_PRECOS = {
@@ -1150,9 +1192,9 @@ async function consultarAgenda(argsTexto, destino) {
         const cf = new Date(conflito.end.dateTime || conflito.end.date);
         const hi = ci.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
         const hf = cf.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-        await sendMessage(destino, `❌ Estúdio ${estudioFiltro} está OCUPADO às ${horaFmt} do dia ${dataFmt}.\n(Reserva: "${conflito.summary}", das ${hi} às ${hf})`);
+        await sendMessage(destino, `❌ ${rotuloEstudioCodigo(estudioFiltro)} está OCUPADO às ${horaFmt} do dia ${dataFmt}.\n(Reserva das ${hi} às ${hf})`);
       } else {
-        await sendMessage(destino, `✅ Estúdio ${estudioFiltro} está LIVRE às ${horaFmt} do dia ${dataFmt}.`);
+        await sendMessage(destino, `✅ ${rotuloEstudioCodigo(estudioFiltro)} está LIVRE às ${horaFmt} do dia ${dataFmt}.`);
       }
     }
     return;
@@ -1160,7 +1202,7 @@ async function consultarAgenda(argsTexto, destino) {
 
   // rótulo do filtro (estúdio específico, ou unidade inteira, ou nada)
   const nomeUnidade = { aclimacao: "Aclimação", belavista: "Bela Vista" };
-  const rotuloFiltro = estudioFiltro ? ` — Estúdio ${estudioFiltro}` : (unidadeFiltro ? ` — ${nomeUnidade[unidadeFiltro]}` : "");
+  const rotuloFiltro = estudioFiltro ? ` — ${rotuloEstudioCodigo(estudioFiltro)}` : (unidadeFiltro ? ` — ${nomeUnidade[unidadeFiltro]}` : "");
 
   // MODO 2: data(s) sem horário -> lista o dia inteiro + horários livres (mín. 2h) por estúdio
   if (datas.length > 0) {
@@ -1174,7 +1216,7 @@ async function consultarAgenda(argsTexto, destino) {
       const eventosParaLivres = estudioFiltro ? await listarAgendaFiltrada(calIds, null, inicio, fim) : eventos;
       const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
 
-      let msg = `📅 ${dataFmt}${rotuloFiltro}:\n`;
+      let msg = `📅 *${dataFmt}*${rotuloFiltro}:\n`;
       if (!apenasLivre) {
         if (eventos.length === 0) {
           msg += "Nenhuma reserva marcada.\n";
@@ -1184,7 +1226,7 @@ async function consultarAgenda(argsTexto, destino) {
             const ef = new Date(ev.end.dateTime || ev.end.date);
             const hi = ei.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
             const hf = ef.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-            return `- ${hi} às ${hf} (${ev.summary})`;
+            return `  ${hi}–${hf} · ${rotuloEstudioEvento(ev)}`;
           }).join("\n") + "\n";
         }
       }
@@ -1203,7 +1245,7 @@ async function consultarAgenda(argsTexto, destino) {
               const hf = l.fim.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
               return `${hi}-${hf}`;
             }).join(" ou ");
-            msg += `Estúdio ${est}: ${linhasLivres}\n`;
+            msg += `${rotuloEstudioCodigo(est)}: ${linhasLivres}\n`;
           }
         }
         if (!algumLivre) msg += "(nenhum horário livre de 2h ou mais)\n";
@@ -1247,7 +1289,7 @@ async function consultarAgenda(argsTexto, destino) {
       const diaRef = new Date(agora.getTime() + i * 24 * 60 * 60 * 1000);
       const diaStr = diaRef.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
       const [a, m, dd] = diaStr.split("-").map(Number);
-      const diaFmt = diaRef.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'short', day: '2-digit', month: '2-digit' });
+      const diaFmt = diaRef.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
 
       const linhasDia = [];
       for (const est of estudiosParaLivres) {
@@ -1264,10 +1306,10 @@ async function consultarAgenda(argsTexto, destino) {
             const hf = l.fim.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
             return `${hi}-${hf}`;
           }).join(" ou ");
-          linhasDia.push(`Est.${est}: ${faixas}`);
+          linhasDia.push(`  ${rotuloEstudioCodigo(est)}: ${faixas}`);
         }
       }
-      if (linhasDia.length > 0) msg += `\n*${diaFmt}*\n${linhasDia.join("\n")}\n`;
+      if (linhasDia.length > 0) msg += `\n📅 *${diaFmt}*\n${linhasDia.join("\n")}\n`;
     }
     await sendMessage(destino, msg.trim());
     return;
@@ -1278,15 +1320,7 @@ async function consultarAgenda(argsTexto, destino) {
     await sendMessage(destino, `📅 AGENDA (${rotulo}): livre, nenhuma reserva encontrada.`);
     return;
   }
-  const linhas = eventos.map(ev => {
-    const ei = new Date(ev.start.dateTime || ev.start.date);
-    const ef = new Date(ev.end.dateTime || ev.end.date);
-    const d = ei.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-    const hi = ei.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-    const hf = ef.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-    return `- ${d} das ${hi} às ${hf} (${ev.summary})`;
-  }).join("\n");
-  await sendMessage(destino, `📅 AGENDA (${rotulo}):\n\n${linhas}`);
+  await sendMessage(destino, `📅 AGENDA (${rotulo}):\n\n${formatarAgendaPorDia(eventos)}`);
 }
 
 app.post("/webhook", async (req, res) => {
