@@ -1,48 +1,20 @@
 {
   "name": "telegram-agenda-bot",
   "version": "1.0.0",
-  "description": "Bot Telegram para consulta e agendamento na agenda do fotógrafo Dionizio usando Google Calendar + Gemini AI",
+  "description": "Bot Telegram (interno, uso da equipe) para gestão da agenda do Estúdio ZM Photo — Google Calendar + Gemini AI",
   "main": "index.js",
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"**/*.{js,json}\""
+    "start": "node index.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/SEU_USUARIO/telegram-agenda-bot.git"
-  },
-  "keywords": [
-    "telegram",
-    "bot",
-    "google-calendar",
-    "gemini",
-    "agendamento",
-    "nodejs"
-  ],
-  "author": "Dionizio <seu@email.com>",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/SEU_USUARIO/telegram-agenda-bot/issues"
-  },
-  "homepage": "https://github.com/SEU_USUARIO/telegram-agenda-bot#readme",
   "dependencies": {
-    "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "googleapis": "^171.0.0",
-    "node-fetch": "^3.3.2"
-  },
-  "devDependencies": {
-    "eslint": "^9.9.0",
-    "eslint-config-prettier": "^9.1.0",
-    "nodemon": "^3.1.7",
-    "prettier": "^3.3.3"
+    "node-fetch": "^3.3.2",
+    "node-cron": "^3.0.3"
   }
 }
