@@ -909,7 +909,12 @@ async function gravarTelefoneNoEvento(ev, calId, telefone) {
 // executar=true : grava de verdade os matches FORTES; os fracos/ambíguos/não-achados ficam para revisão manual.
 async function preencherTelefones(destino, executar = false) {
   const achados = await coletarEventosPre(360);
-  const semTel = achados.filter(({ ev }) => !extrairTelefone((ev.summary || "") + " " + (ev.description || "")));
+  const semTel = achados.filter(({ ev }) => {
+    // pula clientes "zm" (combinado diferente — o bot não cobra nem mexe neles)
+    const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
+    if (/#?\s*\bzm\b/.test(alvo)) return false;
+    return !extrairTelefone((ev.summary || "") + " " + (ev.description || ""));
+  });
   if (semTel.length === 0) {
     await sendMessage(destino, "✅ Nenhuma reserva 'pré' sem telefone. Nada a preencher!");
     return;
