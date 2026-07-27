@@ -985,6 +985,91 @@ async function preencherTelefones(destino, executar = false) {
   await sendMessage(destino, msg);
 }
 
+// =============================
+// REVISÃO INTERATIVA DE TELEFONES (!revisar) — fila que pergunta um por um
+// =============================
+
+// estado das filas de revisão em andamento, por chatId
+const filasRevisao = {};
+
+// monta a fila: agrupa reservas "pré" sem telefone por nome do cliente (nome repetido = 1 item),
+// junta as sugestões de contato de cada grupo. Ignora clientes "zm".
+async function montarFilaRevisao() {
+  const achados = await coletarEventosPre(360);
+  const semTel = achados.filter(({ ev }) => {
+    const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
+    if (/#?\s*\bzm\b/.test(alvo)) return false;
+    return !extrairTelefone((ev.summary || "") + " " + (ev.description || ""));
+  });
+
+  const grupos = {}; // chaveNome -> { nome, itens:[{ev,calId}], sugestoes:[{nome,telefone}] }
+  for (const { ev, calId } of semTel) {
+    const nome = extrairNome(ev) || (ev.summary || "(sem nome)");
+    const chave = normalizar(nome);
+    if (!grupos[chave]) grupos[chave] = { nome, itens: [], sugestoes: null };
+    grupos[chave].itens.push({ ev, calId });
+  }
+
+  // busca sugestões de contato uma vez por grupo
+  for (const chave of Object.keys(grupos)) {
+    const g = grupos[chave];
+    try {
+      const { fortes, fracos } = await buscarCandidatosContato(g.nome);
+      const uniq = (arr) => { const m = {}; arr.forEach(x => m[x.telefone] = x); return Object.values(m); };
+      g.sugestoes = uniq([...fortes, ...fracos]).slice(0, 4);
+    } catch (e) { g.sugestoes = []; }
+  }
+
+  return Object.values(grupos);
+}
+
+// texto da pergunta do item atual da fila
+function textoPerguntaRevisao(fila) {
+  const g = fila.grupos[fila.indice];
+  const total = fila.grupos.length;
+  const pos = fila.indice + 1;
+  // detalhes das reservas desse cliente (datas/estúdios)
+  const detalhes = g.itens.map(({ ev }) => {
+    const ini = new Date(ev.start.dateTime || ev.start.date);
+    const data = ini.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: '2-digit', month: '2-digit' });
+    const hora = ini.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
+    const est = extrairEstudio(ev);
+    return `${data} ${hora}${est ? ` · Est. ${est}` : ""}`;
+  }).join(" | ");
+  const qtd = g.itens.length > 1 ? ` _(${g.itens.length} reservas — o número vale para todas)_` : "";
+  let msg = `📋 *(${pos}/${total}) ${g.nome}*${qtd}\n🗓️ ${detalhes}\n`;
+  if (g.sugestoes && g.sugestoes.length > 0) {
+    msg += `\n💡 Sugestões dos contatos:\n` + g.sugestoes.map(s => `• ${s.telefone} (${s.nome})`).join("\n") + "\n";
+  }
+  msg += `\nMe manda o *telefone* (com DDD), ou escreve *pular* / *parar*.`;
+  return msg;
+}
+
+// grava o telefone em todas as reservas do grupo atual
+async function gravarTelefoneGrupo(g, telefone) {
+  let ok = 0;
+  for (const { ev, calId } of g.itens) {
+    try {
+      await gravarTelefoneNoEvento(ev, calId, telefone);
+      ok++;
+    } catch (e) { console.error("Erro ao gravar telefone (revisão) no evento", ev.id, e.message); }
+  }
+  return ok;
+}
+
+// avança a fila para o próximo item e envia a próxima pergunta (ou encerra)
+async function avancarFilaRevisao(chatId) {
+  const fila = filasRevisao[chatId];
+  if (!fila) return;
+  fila.indice++;
+  if (fila.indice >= fila.grupos.length) {
+    delete filasRevisao[chatId];
+    await sendMessage(chatId, `✅ *Revisão concluída!*\n📞 ${fila.gravados} cliente(s) com telefone gravado\n⏭️ ${fila.pulados} pulado(s)`);
+    return;
+  }
+  await sendMessage(chatId, textoPerguntaRevisao(fila));
+}
+
 function parseHorarioSimples(tok) {
   const m = (tok || "").trim().match(/^(\d{1,2})(?::(\d{2}))?h?$/i);
   if (!m) return null;
@@ -1299,6 +1384,34 @@ app.post("/webhook", async (req, res) => {
     if (podeAgendar(chatId)) {
       const textoOriginal = message.text.trim();
 
+      // 🔁 REVISÃO INTERATIVA DE TELEFONES — prioridade quando há fila ativa (respostas não-comando)
+      if (filasRevisao[chatId] && !textoMensagem.startsWith('!')) {
+        const fila = filasRevisao[chatId];
+        const g = fila.grupos[fila.indice];
+        if (textoMensagem === 'parar') {
+          delete filasRevisao[chatId];
+          await sendMessage(chatId, `⏹️ Revisão encerrada.\n📞 ${fila.gravados} gravado(s) · ⏭️ ${fila.pulados} pulado(s). O que já foi gravado está salvo.`);
+          return;
+        }
+        if (textoMensagem === 'pular') {
+          fila.pulados++;
+          await avancarFilaRevisao(chatId);
+          return;
+        }
+        const num = textoOriginal.replace(/\D/g, "");
+        if (num.length < 10) {
+          await sendMessage(chatId, "⚠️ Telefone inválido. Digite com DDD (ex: 11999998888), ou escreva *pular* / *parar*:");
+          return;
+        }
+        const tel = num.length <= 11 ? "55" + num : num;
+        const gravou = await gravarTelefoneGrupo(g, tel);
+        fila.gravados++;
+        const extra = g.itens.length > 1 ? ` (em ${gravou} reservas)` : "";
+        await sendMessage(chatId, `✅ ${tel} gravado para ${g.nome}${extra}.`);
+        await avancarFilaRevisao(chatId);
+        return;
+      }
+
       if (conversasAgendamento[chatId] && textoMensagem === 'cancelar') {
         delete conversasAgendamento[chatId];
         await sendMessage(chatId, "Agendamento cancelado. 👍");
@@ -1521,6 +1634,18 @@ app.post("/webhook", async (req, res) => {
         await preencherTelefones(chatId, confirmar);
         return;
       }
+      if (textoMensagem === '!revisar') {
+        await sendMessage(chatId, '🔎 Montando a fila de revisão, um instante...');
+        const grupos = await montarFilaRevisao();
+        if (grupos.length === 0) {
+          await sendMessage(chatId, "✅ Nenhuma reserva 'pré' sem telefone. Nada a revisar!");
+          return;
+        }
+        filasRevisao[chatId] = { grupos, indice: 0, gravados: 0, pulados: 0 };
+        await sendMessage(chatId, `📋 *Revisão de telefones* — ${grupos.length} cliente(s) sem número.\nVou perguntar um por um. A cada nome, mande o telefone, ou *pular* / *parar*.`);
+        await sendMessage(chatId, textoPerguntaRevisao(filasRevisao[chatId]));
+        return;
+      }
       if (textoMensagem.startsWith('!buscar')) {
         const termo = message.text.trim().slice(7).trim();
         if (!termo) await sendMessage(chatId, "Escreva o nome depois do comando. Ex.: !buscar new star");
@@ -1553,6 +1678,7 @@ app.post("/webhook", async (req, res) => {
           "!rodarciclo — roda o ciclo real AGORA (marca avisos + alerta 3º aviso; NÃO cancela nada)\n" +
           "!semtelefone — lista reservas sem telefone\n" +
           "!preencher — busca telefone nos contatos e preenche (prévia; !preencher confirmar grava)\n" +
+          "!revisar — pergunta o telefone de cada cliente sem número, um por um, e grava na hora\n" +
           "!buscar [nome] — busca reservas de um cliente\n" +
           "!testarnumero [telefone] — mostra a mensagem + link pronto para um número específico\n" +
           "!confirmarpagamento [telefone] [valor] — marca reservas como pagas (para de cobrar)\n" +
