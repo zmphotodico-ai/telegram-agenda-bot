@@ -836,6 +836,150 @@ async function buscarContatoGoogle(nomeBuscado) {
   return null;
 }
 
+// =============================
+// PREENCHIMENTO AUTOMÁTICO DE TELEFONE (!preencher)
+// =============================
+
+// classifica o match entre o nome da reserva e o nome do contato: "forte" | "fraco" | "nenhum"
+// forte  = a reserva tem nome + sobrenome e TODAS as palavras aparecem no contato (seguro p/ auto-preencher)
+// fraco  = só parte do nome bate, ou é nome de uma palavra só (vai para revisão manual)
+// nenhum = nada em comum
+function classificarMatch(nomeReserva, nomeContato) {
+  const a = normalizar(nomeReserva);
+  const b = normalizar(nomeContato);
+  if (!a || !b) return "nenhum";
+  const palavrasA = a.split(/\s+/).filter(p => p.length >= 2);
+  const palavrasB = b.split(/\s+/).filter(p => p.length >= 2);
+  if (palavrasA.length >= 2) {
+    const todasPresentes = palavrasA.every(p => palavrasB.includes(p));
+    if (todasPresentes) return "forte";
+  }
+  const algumaEmComum = palavrasA.some(p => palavrasB.includes(p));
+  if (algumaEmComum) return "fraco";
+  return "nenhum";
+}
+
+// procura o nome nos contatos do Google e devolve TODOS os candidatos com o tipo de match.
+// Retorna { fortes: [{nome, telefone}], fracos: [{nome, telefone}] }
+async function buscarCandidatosContato(nomeBuscado) {
+  const alvo = normalizar(nomeBuscado);
+  const fortes = [], fracos = [];
+  if (!alvo || !peopleClient) return { fortes, fracos };
+  try {
+    let pageToken;
+    do {
+      const res = await peopleClient.people.connections.list({
+        resourceName: "people/me",
+        pageSize: 1000,
+        personFields: "names,phoneNumbers",
+        pageToken,
+      });
+      for (const pessoa of (res.data.connections || [])) {
+        const telefones = pessoa.phoneNumbers || [];
+        if (telefones.length === 0) continue;
+        for (const n of (pessoa.names || [])) {
+          const nomeContato = n.displayName || "";
+          if (!nomeContato) continue;
+          const tipo = classificarMatch(nomeBuscado, nomeContato);
+          if (tipo === "nenhum") continue;
+          const digitos = (telefones[0].value || "").replace(/\D/g, "");
+          if (!digitos) continue;
+          const tel = digitos.length <= 11 ? "55" + digitos : digitos;
+          const item = { nome: nomeContato, telefone: tel };
+          if (tipo === "forte") fortes.push(item); else fracos.push(item);
+        }
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+  } catch (e) {
+    console.error("Erro ao buscar candidatos no Google:", e.message);
+  }
+  return { fortes, fracos };
+}
+
+// escreve o telefone na descrição do evento (acrescenta ao final, sem apagar nada)
+async function gravarTelefoneNoEvento(ev, calId, telefone) {
+  const desc = ev.description || "";
+  const novaDesc = desc ? `${desc} ${telefone}` : `${extrairNome(ev) || ""} ${telefone}`.trim();
+  await calendar.events.patch({ calendarId: calId, eventId: ev.id, requestBody: { description: novaDesc } });
+}
+
+// !preencher — busca telefone das reservas "pré" sem número nos contatos do Google.
+// executar=false: só mostra a prévia (o que preencheria + o que precisa de revisão).
+// executar=true : grava de verdade os matches FORTES; os fracos/ambíguos/não-achados ficam para revisão manual.
+async function preencherTelefones(destino, executar = false) {
+  const achados = await coletarEventosPre(360);
+  const semTel = achados.filter(({ ev }) => !extrairTelefone((ev.summary || "") + " " + (ev.description || "")));
+  if (semTel.length === 0) {
+    await sendMessage(destino, "✅ Nenhuma reserva 'pré' sem telefone. Nada a preencher!");
+    return;
+  }
+  if (!peopleClient) {
+    await sendMessage(destino, "⚠️ A busca de contatos do Google não está configurada (GOOGLE_CONTATOS_CONFIG). Não dá para preencher automaticamente.");
+    return;
+  }
+
+  const autoPreencher = []; // { ev, calId, nome, telefone }
+  const revisar = [];       // { nomeReserva, motivo, opcoes:[{nome,telefone}] }
+
+  for (const { ev, calId } of semTel) {
+    const nomeReserva = extrairNome(ev);
+    if (!nomeReserva) { revisar.push({ nomeReserva: ev.summary || "(sem nome)", motivo: "sem nome na reserva", opcoes: [] }); continue; }
+    const { fortes, fracos } = await buscarCandidatosContato(nomeReserva);
+    // remove duplicados de telefone dentro de cada grupo
+    const uniq = (arr) => { const m = {}; arr.forEach(x => m[x.telefone] = x); return Object.values(m); };
+    const F = uniq(fortes), W = uniq(fracos);
+    if (F.length === 1) {
+      autoPreencher.push({ ev, calId, nome: nomeReserva, telefone: F[0].telefone, contato: F[0].nome });
+    } else if (F.length > 1) {
+      revisar.push({ nomeReserva, motivo: "vários contatos batem forte", opcoes: F });
+    } else if (W.length >= 1) {
+      revisar.push({ nomeReserva, motivo: "match fraco (confira)", opcoes: W.slice(0, 4) });
+    } else {
+      revisar.push({ nomeReserva, motivo: "não encontrado nos contatos", opcoes: [] });
+    }
+  }
+
+  // PRÉVIA
+  if (!executar) {
+    let msg = `🔎 *Prévia do preenchimento* (${semTel.length} reserva(s) sem telefone)\n\n`;
+    if (autoPreencher.length > 0) {
+      msg += `✅ *${autoPreencher.length} serão preenchidas automaticamente* (match forte):\n`;
+      msg += autoPreencher.map(a => `• ${a.nome} → ${a.telefone}`).join("\n") + "\n\n";
+    } else {
+      msg += "✅ Nenhuma com match forte para preencher automaticamente.\n\n";
+    }
+    if (revisar.length > 0) {
+      msg += `⚠️ *${revisar.length} precisam da sua atenção:*\n`;
+      msg += revisar.map(r => {
+        const ops = r.opcoes.length ? " → " + r.opcoes.map(o => `${o.nome} (${o.telefone})`).join(" ou ") : "";
+        return `• ${r.nomeReserva} — ${r.motivo}${ops}`;
+      }).join("\n") + "\n";
+    }
+    msg += `\nPara gravar as automáticas de verdade, mande: *!preencher confirmar*`;
+    await sendMessage(destino, msg);
+    return;
+  }
+
+  // EXECUTAR (grava só os fortes)
+  let gravados = 0;
+  for (const a of autoPreencher) {
+    try {
+      await gravarTelefoneNoEvento(a.ev, a.calId, a.telefone);
+      gravados++;
+    } catch (e) { console.error("Erro ao gravar telefone no evento", a.ev.id, e.message); }
+  }
+  let msg = `✅ *Preenchimento concluído!*\n${gravados} reserva(s) tiveram o telefone preenchido automaticamente.`;
+  if (revisar.length > 0) {
+    msg += `\n\n⚠️ *${revisar.length} ainda precisam de você* (preencha na mão no Google Calendar):\n`;
+    msg += revisar.map(r => {
+      const ops = r.opcoes.length ? " → " + r.opcoes.map(o => `${o.nome} (${o.telefone})`).join(" ou ") : "";
+      return `• ${r.nomeReserva} — ${r.motivo}${ops}`;
+    }).join("\n");
+  }
+  await sendMessage(destino, msg);
+}
+
 function parseHorarioSimples(tok) {
   const m = (tok || "").trim().match(/^(\d{1,2})(?::(\d{2}))?h?$/i);
   if (!m) return null;
@@ -1366,6 +1510,12 @@ app.post("/webhook", async (req, res) => {
         await listarSemTelefone(chatId);
         return;
       }
+      if (textoMensagem.startsWith('!preencher')) {
+        const confirmar = textoMensagem.includes('confirmar');
+        await sendMessage(chatId, confirmar ? '⏳ Preenchendo os telefones (match forte), um instante...' : '🔎 Procurando telefones nos contatos, um instante...');
+        await preencherTelefones(chatId, confirmar);
+        return;
+      }
       if (textoMensagem.startsWith('!buscar')) {
         const termo = message.text.trim().slice(7).trim();
         if (!termo) await sendMessage(chatId, "Escreva o nome depois do comando. Ex.: !buscar new star");
@@ -1397,6 +1547,7 @@ app.post("/webhook", async (req, res) => {
           "!testar — mostra as cobranças de hoje (não marca nada na agenda)\n" +
           "!rodarciclo — roda o ciclo real AGORA (marca avisos + alerta 3º aviso; NÃO cancela nada)\n" +
           "!semtelefone — lista reservas sem telefone\n" +
+          "!preencher — busca telefone nos contatos e preenche (prévia; !preencher confirmar grava)\n" +
           "!buscar [nome] — busca reservas de um cliente\n" +
           "!testarnumero [telefone] — mostra a mensagem + link pronto para um número específico\n" +
           "!confirmarpagamento [telefone] [valor] — marca reservas como pagas (para de cobrar)\n" +
