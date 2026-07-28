@@ -1190,6 +1190,16 @@ function formatarFaixaLivre(f) {
   return f.aviso ? `${base} ⚠️` : base;
 }
 
+// verifica se uma faixa livre "encosta" no período (manhã/tarde/noite) do dia.
+// regra: a faixa entra se tiver QUALQUER sobreposição com a janela do período —
+// assim nenhuma vaga aproveitável some (mostra a faixa inteira, do jeito real).
+function faixaNoPeriodo(faixa, ano, mes, dia, periodo) {
+  if (!periodo) return true;
+  const pIni = dataHoraSP(ano, mes, dia, periodo.ini, 0);
+  const pFim = dataHoraSP(ano, mes, dia, periodo.fim, 0);
+  return faixa.ini < pFim && faixa.fim > pIni;
+}
+
 function estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro) {
   if (estudioFiltro) return [estudioFiltro];
   if (unidadeFiltro === "aclimacao") return ["A", "B", "C", "D", "AB"];
@@ -1206,15 +1216,18 @@ async function normalizarComandoAgenda(textoLivre) {
 - Unidade inteira: "aclimacao" ou "belavista"
 - "livre" se for sobre horários vagos
 - "hoje", "semana" ou "semana que vem"
+- Período do dia: "manha", "tarde" ou "noite" (preserve se o pedido citar)
 - Data(s) DD/MM (várias separadas por vírgula, sem espaço)
 - Horário HH:MM
 
-Responda APENAS com o comando em uma linha, sem explicação, sem aspas. Ordem: [estúdio/unidade] [livre] [semana/data] [horário].
+Responda APENAS com o comando em uma linha, sem explicação, sem aspas. Ordem: [estúdio/unidade] [livre] [semana/data] [período] [horário].
 
 Exemplos:
 "horários vagos do estúdio A essa semana" -> A livre semana
 "o estúdio 1 está livre dia 2 de agosto às 14h?" -> 1 belavista livre 02/08 14:00
 "como está a bela vista hoje" -> belavista hoje
+"o que tem livre dia 01/07 de manhã" -> livre 01/07 manha
+"vagos do estúdio 2 à tarde amanhã" -> 2 livre tarde
 
 PEDIDO: "${textoLivre}"
 COMANDO:`;
@@ -1240,7 +1253,7 @@ async function consultarAgenda(argsTexto, destino) {
     .replace(/proxima\s+semana|próxima\s+semana/gi, "semanaquevem");
   const tokens = argsNormalizado.trim().split(/\s+/).filter(Boolean);
   const codigosEstudio = ["AB", "A", "B", "C", "D", "1", "2", "3"];
-  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null;
+  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null, periodo = null;
   const hojeInfo = new Date();
   const hojeStr = hojeInfo.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
   const [hojeAno, hojeMes, hojeDia] = hojeStr.split("-").map(Number);
@@ -1250,6 +1263,9 @@ async function consultarAgenda(argsTexto, destino) {
     if (tokNorm === "semana") { semana = true; continue; }
     if (tokNorm === "semanaquevem") { semana = true; proximaSemana = true; continue; }
     if (tokNorm === "livre" || tokNorm === "livres") { apenasLivre = true; continue; }
+    if (tokNorm === "manha" || tokNorm === "manhas") { periodo = { nome: "manhã", ini: 7, fim: 13 }; continue; }
+    if (tokNorm === "tarde" || tokNorm === "tardes") { periodo = { nome: "tarde", ini: 13, fim: 18 }; continue; }
+    if (tokNorm === "noite" || tokNorm === "noites") { periodo = { nome: "noite", ini: 18, fim: 23 }; continue; }
     if (tokNorm === "hoje") { datas.push({ dia: hojeDia, mes: hojeMes }); continue; }
     if (tokNorm === "aclimacao") { unidadeFiltro = "aclimacao"; continue; }
     if (tokNorm === "belavista") { unidadeFiltro = "belavista"; continue; }
@@ -1319,19 +1335,20 @@ async function consultarAgenda(argsTexto, destino) {
       }
 
       if (estudiosParaLivres.length > 0) {
-        msg += "\n🟢 *Horários livres (mín. 2h, 07h-23h):*\n";
+        msg += periodo ? `\n🟢 *Horários livres — ${periodo.nome} (mín. 2h):*\n` : "\n🟢 *Horários livres (mín. 2h, 07h-23h):*\n";
         let algumLivre = false;
         for (const est of estudiosParaLivres) {
           const conflitantes = estudiosConflitantes(est);
           const eventosDoEstudio = eventosParaLivres.filter(ev => conflitantes.includes(extrairEstudio(ev)));
-          const livres = calcularHorariosLivres(eventosDoEstudio, ano, d.mes, d.dia);
+          let livres = calcularHorariosLivres(eventosDoEstudio, ano, d.mes, d.dia);
+          if (periodo) livres = livres.filter(l => faixaNoPeriodo(l, ano, d.mes, d.dia, periodo));
           if (livres.length > 0) {
             algumLivre = true;
             const linhasLivres = livres.map(l => formatarFaixaLivre(l)).join(" ou ");
             msg += `${rotuloEstudioCodigo(est)}: ${linhasLivres}\n`;
           }
         }
-        if (!algumLivre) msg += "(nenhum horário livre de 2h ou mais)\n";
+        if (!algumLivre) msg += periodo ? `(nenhum horário livre de 2h ou mais de ${periodo.nome})\n` : "(nenhum horário livre de 2h ou mais)\n";
       }
 
       let msgFinal = msg.trim();
@@ -1364,7 +1381,7 @@ async function consultarAgenda(argsTexto, destino) {
   if (apenasLivre) {
     const estudiosParaLivres = estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro);
     const eventosPeriodo = await listarAgendaFiltrada(calIds, null, agora, limite);
-    let msg = `🟢 HORÁRIOS LIVRES (${rotulo}, mín. 2h, 07h-23h):\n`;
+    let msg = `🟢 HORÁRIOS LIVRES (${rotulo}${periodo ? ` · ${periodo.nome}` : ""}, mín. 2h):\n`;
     for (let i = 0; i < dias; i++) {
       const diaRef = new Date(agora.getTime() + i * 24 * 60 * 60 * 1000);
       const diaStr = diaRef.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
@@ -1379,7 +1396,8 @@ async function consultarAgenda(argsTexto, destino) {
           const evDataStr = new Date(ev.start.dateTime || ev.start.date).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
           return evDataStr === diaStr;
         });
-        const livres = calcularHorariosLivres(eventosDoDiaEstudio, a, m, dd);
+        let livres = calcularHorariosLivres(eventosDoDiaEstudio, a, m, dd);
+        if (periodo) livres = livres.filter(l => faixaNoPeriodo(l, a, m, dd, periodo));
         if (livres.length > 0) {
           const faixas = livres.map(l => formatarFaixaLivre(l)).join(" ou ");
           linhasDia.push(`  ${rotuloEstudioCodigo(est)}: ${faixas}`);
@@ -1624,7 +1642,13 @@ app.post("/webhook", async (req, res) => {
               const lista = titulos.map(t => `📌 ${t}`).join("\n");
               await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : "\n🔖 pré-reserva"}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
               await esperar(1500);
-              await sendMessage(chatId, montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal));
+              const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
+              await sendMessage(chatId, msgCliente);
+              // link separado do WhatsApp — só quando a reserva tem telefone
+              if (d.telefone) {
+                await esperar(800);
+                await sendMessage(chatId, `👉 [Tocar para enviar no WhatsApp](${linkWhatsApp(d.telefone, msgCliente)})`);
+              }
             } catch (e) {
               await sendMessage(chatId, `❌ Erro ao criar o(s) evento(s): ${e.message}`);
             }
