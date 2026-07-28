@@ -1070,6 +1070,41 @@ async function avancarFilaRevisao(chatId) {
   await sendMessage(chatId, textoPerguntaRevisao(fila));
 }
 
+// =============================
+// MARCAR CLIENTE COMO "NÃO COBRAR" (!zm)
+// =============================
+
+// estado de confirmações !zm pendentes, por chatId
+const zmPendente = {};
+
+// já tem a marca zm?
+function jaTemZm(ev) {
+  const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
+  return /#?\s*\bzm\b/.test(alvo);
+}
+
+// busca reservas "pré" cujo nome contém o termo (para o !zm). Não filtra zm aqui de propósito:
+// queremos ver inclusive as que já estão marcadas, para não remarcar.
+async function buscarReservasPorNomeParaZm(termo) {
+  const alvo = normalizar(termo);
+  const achados = await coletarEventosPre(360);
+  const encontrados = [];
+  for (const { ev, calId } of achados) {
+    const nome = normalizar(extrairNome(ev) || ev.summary || "");
+    if (nome.includes(alvo) || alvo.includes(nome)) encontrados.push({ ev, calId });
+  }
+  return encontrados;
+}
+
+// marca "zm" na descrição de uma reserva (não apaga nada; só acrescenta se ainda não tiver)
+async function marcarZmNoEvento(ev, calId) {
+  if (jaTemZm(ev)) return false; // já tem, não duplica
+  const desc = (ev.description || "").trim();
+  const novaDesc = desc ? `${desc} zm` : "zm";
+  await calendar.events.patch({ calendarId: calId, eventId: ev.id, requestBody: { description: novaDesc } });
+  return true;
+}
+
 function parseHorarioSimples(tok) {
   const m = (tok || "").trim().match(/^(\d{1,2})(?::(\d{2}))?h?$/i);
   if (!m) return null;
@@ -1412,6 +1447,27 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
+      // ✅ confirmação de um !zm pendente
+      if (zmPendente[chatId] && !textoMensagem.startsWith('!')) {
+        if (textoMensagem === 'sim') {
+          const pend = zmPendente[chatId];
+          delete zmPendente[chatId];
+          let marcadas = 0;
+          for (const { ev, calId } of pend.reservas) {
+            try { if (await marcarZmNoEvento(ev, calId)) marcadas++; } catch (e) { console.error("Erro ao marcar zm:", e.message); }
+          }
+          await sendMessage(chatId, `✅ Pronto! ${marcadas} reserva(s) de "${pend.termo}" marcada(s) com *zm*. O bot não vai mais cobrar esse cliente.`);
+          return;
+        }
+        if (textoMensagem === 'nao' || textoMensagem === 'não') {
+          delete zmPendente[chatId];
+          await sendMessage(chatId, "Ok, não marquei nada. 👍");
+          return;
+        }
+        await sendMessage(chatId, "Responda *SIM* para marcar como não-cobrar, ou *NÃO* para desistir:");
+        return;
+      }
+
       if (conversasAgendamento[chatId] && textoMensagem === 'cancelar') {
         delete conversasAgendamento[chatId];
         await sendMessage(chatId, "Agendamento cancelado. 👍");
@@ -1646,6 +1702,35 @@ app.post("/webhook", async (req, res) => {
         await sendMessage(chatId, textoPerguntaRevisao(filasRevisao[chatId]));
         return;
       }
+      if (textoMensagem.startsWith('!zm')) {
+        const termo = message.text.trim().slice(3).trim();
+        if (!termo) {
+          await sendMessage(chatId, "Escreva o nome depois do comando. Ex.: !zm new star");
+          return;
+        }
+        await sendMessage(chatId, '🔎 Procurando as reservas, um instante...');
+        const reservas = await buscarReservasPorNomeParaZm(termo);
+        if (reservas.length === 0) {
+          await sendMessage(chatId, `🔍 Nenhuma reserva 'pré' encontrada para "${termo}".`);
+          return;
+        }
+        const naoMarcadas = reservas.filter(({ ev }) => !jaTemZm(ev));
+        const jaMarcadas = reservas.length - naoMarcadas.length;
+        if (naoMarcadas.length === 0) {
+          await sendMessage(chatId, `ℹ️ As ${reservas.length} reserva(s) de "${termo}" já estão marcadas com *zm*. Nada a fazer.`);
+          return;
+        }
+        const lista = naoMarcadas.map(({ ev }) => {
+          const ini = new Date(ev.start.dateTime || ev.start.date);
+          const data = ini.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: '2-digit', month: '2-digit' });
+          const hora = ini.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
+          return `• ${data} ${hora} — ${ev.summary || "(sem título)"}`;
+        }).join("\n");
+        const extraJa = jaMarcadas > 0 ? `\n_(${jaMarcadas} já estava(m) marcada(s) e serão ignoradas)_` : "";
+        zmPendente[chatId] = { termo, reservas: naoMarcadas };
+        await sendMessage(chatId, `Vou marcar *zm* (não cobrar) nestas ${naoMarcadas.length} reserva(s) de "${termo}":\n${lista}${extraJa}\n\nConfirma? Responda *SIM* ou *NÃO*.`);
+        return;
+      }
       if (textoMensagem.startsWith('!buscar')) {
         const termo = message.text.trim().slice(7).trim();
         if (!termo) await sendMessage(chatId, "Escreva o nome depois do comando. Ex.: !buscar new star");
@@ -1679,6 +1764,7 @@ app.post("/webhook", async (req, res) => {
           "!semtelefone — lista reservas sem telefone\n" +
           "!preencher — busca telefone nos contatos e preenche (prévia; !preencher confirmar grava)\n" +
           "!revisar — pergunta o telefone de cada cliente sem número, um por um, e grava na hora\n" +
+          "!zm [nome] — marca o cliente como NÃO cobrar (ex.: !zm new star)\n" +
           "!buscar [nome] — busca reservas de um cliente\n" +
           "!testarnumero [telefone] — mostra a mensagem + link pronto para um número específico\n" +
           "!confirmarpagamento [telefone] [valor] — marca reservas como pagas (para de cobrar)\n" +
