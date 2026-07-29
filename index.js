@@ -727,6 +727,9 @@ function montarMensagemParaClienteMulti(d, reservas, pagoFinal) {
   if (pagoFinal) {
     return `Obrigado ${primeiroNome}! 😊\nReserva confirmada:\n${linhas}\n${endereco}\n\nPagamento de R$ ${pagoFinal} recebido. Até lá!`;
   }
+  if (d.naoCobrar) {
+    return `Obrigado ${primeiroNome}! 😊\nReserva confirmada:\n${linhas}\n${endereco}\n\nQualquer dúvida é só chamar. Até lá!`;
+  }
   let sinalTotal = 0;
   for (const r of reservas) {
     const s = calcularSinalAgendamento({ unidade: r.unidade, estudio: r.estudio }, r.inicio, r.fim);
@@ -746,7 +749,7 @@ async function enviarResumoAgendamento(chatId, conversa) {
     linhas += `\n📅 ${dataFmt} · ${hi} às ${hf} · Estúdio ${r.estudio} (${r.unidade})`;
   }
   await sendMessage(chatId,
-    `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : "🔖 pré-reserva"}\n\n` +
+    `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : (d.naoCobrar ? "🔕 não cobrar (marcado zm)" : "🔖 pré-reserva")}\n\n` +
     `Responda *SIM* para confirmar ou *NÃO* para cancelar.`
   );
 }
@@ -759,6 +762,7 @@ async function criarEvento(dados) {
   let descricao = dados.nome;
   if (dados.telefone) descricao += ` ${dados.telefone}`;
   if (dados.pago) descricao += `\npago R$${dados.pago}`;
+  if (dados.naoCobrar) descricao += ` zm`; // marca de não-cobrar
   const eventBody = {
     summary: titulo,
     description: descricao,
@@ -1562,7 +1566,7 @@ app.post("/webhook", async (req, res) => {
             d.telefone = d._telefoneSugerido;
             delete d._telefoneSugerido;
             conversa.passo = 'pagamento';
-            await sendMessage(chatId, "💰 É *pré-reserva* ou já foi *pago*?\n\nEscreva 'pré' ou 'pago'");
+            await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
             return;
           }
           const num = textoOriginal.replace(/\D/g, "");
@@ -1570,7 +1574,7 @@ app.post("/webhook", async (req, res) => {
           d.telefone = num;
           delete d._telefoneSugerido;
           conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva* ou já foi *pago*?\n\nEscreva 'pré' ou 'pago'");
+          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
           return;
         }
 
@@ -1579,13 +1583,14 @@ app.post("/webhook", async (req, res) => {
           if (num.length < 10) { await sendMessage(chatId, "⚠️ Telefone inválido. Digite com DDD (ex: 11999998888):"); return; }
           d.telefone = num;
           conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva* ou já foi *pago*?\n\nEscreva 'pré' ou 'pago'");
+          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
           return;
         }
 
         if (conversa.passo === 'pagamento') {
           if (textoMensagem === 'pre' || textoMensagem === 'pré') {
             d.pago = null;
+            d.naoCobrar = false;
             conversa.passo = 'confirmar';
             await enviarResumoAgendamento(chatId, conversa);
             return;
@@ -1595,7 +1600,14 @@ app.post("/webhook", async (req, res) => {
             await sendMessage(chatId, "💵 Qual o *valor pago*? (ex: 210)");
             return;
           }
-          await sendMessage(chatId, "⚠️ Escreva 'pré' ou 'pago':");
+          if (textoMensagem === 'nao cobrar' || textoMensagem === 'não cobrar' || textoMensagem === 'naocobrar' || textoMensagem === 'nao' || textoMensagem === 'não' || textoMensagem === 'zm') {
+            d.pago = null;
+            d.naoCobrar = true;
+            conversa.passo = 'confirmar';
+            await enviarResumoAgendamento(chatId, conversa);
+            return;
+          }
+          await sendMessage(chatId, "⚠️ Escreva 'pré', 'pago' ou 'não cobrar':");
           return;
         }
 
@@ -1636,11 +1648,12 @@ app.post("/webhook", async (req, res) => {
             const titulos = [];
             try {
               for (const r of conversa.reservas) {
-                const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal });
+                const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar });
                 titulos.push(titulo);
               }
               const lista = titulos.map(t => `📌 ${t}`).join("\n");
-              await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : "\n🔖 pré-reserva"}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
+              const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : "\n🔖 pré-reserva");
+              await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
               await esperar(1500);
               const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
               await sendMessage(chatId, msgCliente);
