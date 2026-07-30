@@ -55,13 +55,15 @@ try {
   peopleClient = google.people({ version: "v1", auth: authContatos });
 } catch (error) { console.error("Erro People API (contatos):", error); }
 
-async function sendMessage(chatId, text) {
+async function sendMessage(chatId, text, semMarkdown = false) {
   if (!chatId || !text) return false;
   try {
+    const body = { chat_id: chatId, text };
+    if (!semMarkdown) body.parse_mode = "Markdown";
     const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!data.ok) {
@@ -77,6 +79,17 @@ async function sendMessage(chatId, text) {
   } catch (e) {
     console.error(`Erro ao enviar para ${chatId}:`, e.message);
     return false;
+  }
+}
+
+// envia a mensagem pronta pro cliente em DOIS blocos separados, sem markdown:
+// 1) o texto puro (pra copiar/colar limpo)  2) a URL do WhatsApp pura (não quebra como o markdown)
+// Se não houver telefone, envia só o texto.
+async function enviarTextoELink(chatId, texto, telefone) {
+  await sendMessage(chatId, texto, true); // texto limpo, sem markdown
+  if (telefone) {
+    await esperar(600);
+    await sendMessage(chatId, `👉 Toque para enviar no WhatsApp:\n${linkWhatsApp(telefone, texto)}`, true);
   }
 }
 
@@ -415,8 +428,8 @@ async function testarUmNumero(telBusca, destino = ADMIN_CHAT_ID) {
   }
   const telReal = extrairTelefone((encontrados[0].ev.summary || "") + " " + (encontrados[0].ev.description || ""));
   const msg = montarMensagemAgrupada(encontrados);
-  const link = linkWhatsApp(telReal, msg);
-  await sendMessage(destino, `🔍 ${encontrados.length} reserva(s) encontrada(s) para ${telReal}:\n\n✉️ Mensagem:\n${msg}\n\n👉 [Tocar para enviar no WhatsApp](${link})`);
+  await sendMessage(destino, `🔍 ${encontrados.length} reserva(s) encontrada(s) para ${telReal}:`);
+  await enviarTextoELink(destino, msg, telReal);
 }
 
 async function buscarPorNome(termo, destino = ADMIN_CHAT_ID) {
@@ -532,8 +545,8 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
     try {
       const msg = montarMensagemAgrupada(eventos);
       const qtd = eventos.length > 1 ? ` (${eventos.length} datas)` : "";
-      const link = linkWhatsApp(tel, msg);
-      await sendMessage(destino, `━━━━━━━━━━\n📞 ${tel}${qtd}\n\n✉️ Mensagem:\n${msg}\n\n👉 [Tocar para enviar no WhatsApp](${link})`);
+      await sendMessage(destino, `━━━━━━━━━━\n📞 ${tel}${qtd}`);
+      await enviarTextoELink(destino, msg, tel);
     } catch (e) {
       await sendMessage(destino, `⚠️ Erro ao processar o cliente ${tel}: ${e.message}`);
     }
@@ -544,7 +557,8 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
   for (const item of semTelefone) {
     try {
       const msg = montarMensagemAgrupada([item]);
-      await sendMessage(destino, `━━━━━━━━━━\n📞 ⚠️ SEM telefone — ${item.ev.summary || "(sem título)"}\n\n✉️ Mensagem (preencha o telefone antes de mandar):\n${msg}`);
+      await sendMessage(destino, `━━━━━━━━━━\n📞 ⚠️ SEM telefone — ${item.ev.summary || "(sem título)"} — copie o texto abaixo:`);
+      await enviarTextoELink(destino, msg, null);
     } catch (e) {
       await sendMessage(destino, `⚠️ Erro ao processar "${item.ev.summary || "(sem título)"}": ${e.message}`);
     }
@@ -561,12 +575,9 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
       const msgCliente = montarMensagemConfirmacao(ev, calId);
       const inicio = new Date(ev.start.dateTime || ev.start.date);
       const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
-      const cabecalho = `🔴 *3º AVISO DE COBRANÇA — precisa da sua decisão*\n📌 ${dataFmt} · ${rotuloEstudioEvento(ev)}`;
-      const corpo = `\n\nEsta reserva já recebeu 2 avisos e continua sem confirmação.\n⚠️ O bot NÃO cancelou nada. Você decide: cobrar de novo, ou cancelar manualmente (mover para a agenda Cancelados na mão).`;
-      const bloco = tel
-        ? `${cabecalho}${corpo}\n\n✉️ Mensagem de cobrança pronta:\n${msgCliente}\n\n👉 [Tocar para enviar no WhatsApp](${linkWhatsApp(tel, msgCliente)})`
-        : `${cabecalho}${corpo}\n\n⚠️ SEM telefone cadastrado nesta reserva.\n\n✉️ Mensagem:\n${msgCliente}`;
-      await sendMessage(destino, bloco);
+      const cabecalho = `🔴 *3º AVISO DE COBRANÇA — precisa da sua decisão*\n📌 ${dataFmt} · ${rotuloEstudioEvento(ev)}\n\nEsta reserva já recebeu 2 avisos e continua sem confirmação.\n⚠️ O bot NÃO cancelou nada. Você decide: cobrar de novo, ou cancelar manualmente.`;
+      await sendMessage(destino, cabecalho);
+      await enviarTextoELink(destino, msgCliente, tel);
     } catch (e) {
       await sendMessage(destino, `⚠️ Erro no 3º aviso de "${ev.summary || "(sem título)"}": ${e.message}`);
     }
@@ -1656,12 +1667,7 @@ app.post("/webhook", async (req, res) => {
               await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
               await esperar(1500);
               const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
-              await sendMessage(chatId, msgCliente);
-              // link separado do WhatsApp — só quando a reserva tem telefone
-              if (d.telefone) {
-                await esperar(800);
-                await sendMessage(chatId, `👉 [Tocar para enviar no WhatsApp](${linkWhatsApp(d.telefone, msgCliente)})`);
-              }
+              await enviarTextoELink(chatId, msgCliente, d.telefone);
             } catch (e) {
               await sendMessage(chatId, `❌ Erro ao criar o(s) evento(s): ${e.message}`);
             }
