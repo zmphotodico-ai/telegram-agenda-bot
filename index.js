@@ -1225,24 +1225,38 @@ function estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro) {
 async function normalizarComandoAgenda(textoLivre) {
   if (!textoLivre || !textoLivre.trim()) return textoLivre;
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
-  const prompt = `Converta o pedido abaixo (em português, sobre agenda de estúdio fotográfico) num comando curto, usando só estas peças possíveis:
+  // data de hoje (fuso SP) para o Gemini calcular datas relativas
+  const hojeSP = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // YYYY-MM-DD
+  const [hAno, hMes, hDia] = hojeSP.split("-");
+  const diaSemHoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long" });
+  const prompt = `Você converte um pedido em português (sobre a agenda de um estúdio fotográfico) em um comando curto.
 
-- Estúdio específico: A, B, C, D, AB (Aclimação) ou 1, 2, 3 (Bela Vista)
+HOJE é ${hDia}/${hMes}/${hAno} (${diaSemHoje}). Use isso para calcular qualquer data relativa.
+
+Peças possíveis do comando:
+- Estúdio: A, B, C, D, AB (Aclimação) ou 1, 2, 3 (Bela Vista)
 - Unidade inteira: "aclimacao" ou "belavista"
-- "livre" se for sobre horários vagos
-- "hoje", "semana" ou "semana que vem"
-- Período do dia: "manha", "tarde" ou "noite" (preserve se o pedido citar)
-- Data(s) DD/MM (várias separadas por vírgula, sem espaço)
-- Horário HH:MM
+- "livre" (se o pedido é sobre horários vagos/livres)
+- Período do dia: "manha", "tarde" ou "noite"
+- Horário exato: HH:MM
+- DATAS: sempre no formato DD/MM, várias separadas por vírgula SEM espaço (ex.: 02/08,09/08,16/08)
 
-Responda APENAS com o comando em uma linha, sem explicação, sem aspas. Ordem: [estúdio/unidade] [livre] [semana/data] [período] [horário].
+REGRA IMPORTANTE sobre datas: se o pedido mencionar dia(s) da semana ("sábados", "domingo"), um mês ("agosto"), "quinzena", "próximos N ...", ou qualquer intervalo, VOCÊ MESMO calcula as datas concretas e devolve a lista em DD/MM. Não invente palavras como "agosto" ou "sabados" no comando — devolva as datas já calculadas.
 
-Exemplos:
+- "hoje" continua valendo como "hoje". "semana" = próximos 7 dias; "semana que vem" = a próxima semana. Esses três pode manter como palavra.
+- Para meses/dias da semana, calcule as datas reais a partir de HOJE.
+
+Responda APENAS o comando em uma linha, sem explicação nem aspas. Ordem: [estúdio/unidade] [livre] [datas ou semana] [período] [horário].
+
+Exemplos (assumindo que hoje seja 31/07/2026):
 "horários vagos do estúdio A essa semana" -> A livre semana
 "o estúdio 1 está livre dia 2 de agosto às 14h?" -> 1 belavista livre 02/08 14:00
 "como está a bela vista hoje" -> belavista hoje
-"o que tem livre dia 01/07 de manhã" -> livre 01/07 manha
-"vagos do estúdio 2 à tarde amanhã" -> 2 livre tarde
+"o que tem livre dia 01/08 de manhã" -> livre 01/08 manha
+"todos os sábados de agosto no estúdio AB" -> AB livre 01/08,08/08,15/08,22/08,29/08
+"agosto inteiro estúdio C" -> C livre 01/08,02/08,03/08,04/08,05/08,06/08,07/08,08/08,09/08,10/08,11/08,12/08,13/08,14/08,15/08,16/08,17/08,18/08,19/08,20/08,21/08,22/08,23/08,24/08,25/08,26/08,27/08,28/08,29/08,30/08,31/08
+"próximos 3 domingos bela vista" -> belavista livre 03/08,10/08,17/08
+"vagos estúdio 2 à tarde nas segundas de agosto" -> 2 livre 03/08,10/08,17/08,24/08,31/08 tarde
 
 PEDIDO: "${textoLivre}"
 COMANDO:`;
@@ -1327,6 +1341,15 @@ async function consultarAgenda(argsTexto, destino) {
 
   if (datas.length > 0) {
     const estudiosParaLivres = estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro);
+    // ordena as datas e limita a um teto de segurança (evita consulta gigante)
+    datas.sort((a, b) => (a.mes - b.mes) || (a.dia - b.dia));
+    if (datas.length > 40) {
+      await sendMessage(destino, `⚠️ Você pediu ${datas.length} dias — vou mostrar os primeiros 40 para não sobrecarregar. Refine o período se precisar.`);
+      datas = datas.slice(0, 40);
+    }
+
+    const blocos = [];        // cada dia vira um bloco de texto
+    let temAviso = false;
     for (const d of datas) {
       const inicio = dataHoraSP(ano, d.mes, d.dia, 0, 0);
       const fim = dataHoraSP(ano, d.mes, d.dia, 23, 59);
@@ -1334,41 +1357,55 @@ async function consultarAgenda(argsTexto, destino) {
       const eventosParaLivres = estudioFiltro ? await listarAgendaFiltrada(calIds, null, inicio, fim) : eventos;
       const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
 
-      let msg = `📅 *${dataFmt}*${rotuloFiltro}:\n`;
+      let bloco = `📅 *${dataFmt}*${rotuloFiltro}:`;
       if (!apenasLivre) {
         if (eventos.length === 0) {
-          msg += "Nenhuma reserva marcada.\n";
+          bloco += `\nNenhuma reserva marcada.`;
         } else {
-          msg += eventos.map(ev => {
+          bloco += "\n" + eventos.map(ev => {
             const ei = new Date(ev.start.dateTime || ev.start.date);
             const ef = new Date(ev.end.dateTime || ev.end.date);
             const hi = ei.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
             const hf = ef.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
             return `  ${hi}–${hf} · ${rotuloEstudioEvento(ev)}`;
-          }).join("\n") + "\n";
+          }).join("\n");
         }
       }
 
       if (estudiosParaLivres.length > 0) {
-        msg += periodo ? `\n🟢 *Horários livres — ${periodo.nome} (mín. 2h):*\n` : "\n🟢 *Horários livres (mín. 2h, 07h-23h):*\n";
-        let algumLivre = false;
+        const linhasEst = [];
         for (const est of estudiosParaLivres) {
           const conflitantes = estudiosConflitantes(est);
           const eventosDoEstudio = eventosParaLivres.filter(ev => conflitantes.includes(extrairEstudio(ev)));
           let livres = calcularHorariosLivres(eventosDoEstudio, ano, d.mes, d.dia);
           if (periodo) livres = livres.filter(l => faixaNoPeriodo(l, ano, d.mes, d.dia, periodo));
           if (livres.length > 0) {
-            algumLivre = true;
             const linhasLivres = livres.map(l => formatarFaixaLivre(l)).join(" ou ");
-            msg += `${rotuloEstudioCodigo(est)}: ${linhasLivres}\n`;
+            if (linhasLivres.includes("⚠️")) temAviso = true;
+            linhasEst.push(`  ${rotuloEstudioCodigo(est)}: ${linhasLivres}`);
           }
         }
-        if (!algumLivre) msg += periodo ? `(nenhum horário livre de 2h ou mais de ${periodo.nome})\n` : "(nenhum horário livre de 2h ou mais)\n";
+        if (linhasEst.length > 0) bloco += "\n🟢 " + (periodo ? `livres (${periodo.nome}):\n` : "livres:\n") + linhasEst.join("\n");
+        else bloco += periodo ? `\n(sem horário livre de 2h+ de ${periodo.nome})` : `\n(sem horário livre de 2h+)`;
       }
+      blocos.push(bloco);
+    }
 
-      let msgFinal = msg.trim();
-      if (msgFinal.includes("⚠️")) msgFinal += LEGENDA_AVISO;
+    // envia os blocos agrupados em poucas mensagens (respeitando ~3500 chars por mensagem)
+    let buffer = "";
+    for (const bloco of blocos) {
+      if ((buffer + "\n\n" + bloco).length > 3500 && buffer) {
+        await sendMessage(destino, buffer.trim());
+        buffer = "";
+      }
+      buffer += (buffer ? "\n\n" : "") + bloco;
+    }
+    if (buffer.trim()) {
+      let msgFinal = buffer.trim();
+      if (temAviso) msgFinal += LEGENDA_AVISO;
       await sendMessage(destino, msgFinal);
+    } else if (temAviso) {
+      await sendMessage(destino, LEGENDA_AVISO.trim());
     }
     return;
   }
