@@ -263,6 +263,44 @@ function montarMensagemConfirmacao(ev, calId) {
   return `${saudacao}\nGostaria de confirmar o Aluguel de Estúdio ${dataExtenso}, das ${horaInicio} às ${horaFim}${textoEstudio}.\n${endereco}${linhaValor}\n\nPIX/CNPJ\nzmphoto@zmphoto.com.br\n43.345.289/0001-93\nZemaria Produções Fotográficas LTDA`;
 }
 
+// true se a reserva é do tipo "confirmar presença" (zm2) — não cobra sinal, só confirma
+function ehZm2(ev) {
+  const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
+  return /\bzm2\b/.test(alvo);
+}
+
+// mensagem de CONFIRMAÇÃO DE PRESENÇA (zm2) — sem PIX, sem valor
+function montarMensagemPresenca(ev, calId) {
+  const inicio = new Date(ev.start.dateTime || ev.start.date);
+  const fim = new Date(ev.end.dateTime || ev.end.date);
+  const dataExtenso = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: 'numeric', month: 'long' });
+  const hi = inicio.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' }).replace(":", "h");
+  const hf = fim.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' }).replace(":", "h");
+  const ehAclimacao = (CALENDAR_IDS[0] === calId);
+  const endereco = ehAclimacao ? "Rua Gualaxo, 206 - Aclimação" : "Rua Santa Madalena, 46 - Bela Vista";
+  const estudio = extrairEstudio(ev);
+  const textoEstudio = estudio ? `, no Estúdio ${estudio}` : "";
+  const nome = extrairNome(ev);
+  const saudacao = nome ? `Olá ${nome}, tudo bem? 😊` : "Olá, tudo bem? 😊";
+  return `${saudacao}\nPassando pra confirmar seu ensaio de ${dataExtenso}, das ${hi} às ${hf}${textoEstudio}.\n${endereco}\n\nEstá tudo certo pra esse dia?`;
+}
+
+// mensagem de CONFIRMAÇÃO 48h para quem JÁ PAGOU — tom simpático, sem cobrança
+function montarMensagem48hPago(ev, calId) {
+  const inicio = new Date(ev.start.dateTime || ev.start.date);
+  const fim = new Date(ev.end.dateTime || ev.end.date);
+  const dataExtenso = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: 'numeric', month: 'long' });
+  const hi = inicio.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' }).replace(":", "h");
+  const hf = fim.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' }).replace(":", "h");
+  const ehAclimacao = (CALENDAR_IDS[0] === calId);
+  const endereco = ehAclimacao ? "Rua Gualaxo, 206 - Aclimação" : "Rua Santa Madalena, 46 - Bela Vista";
+  const estudio = extrairEstudio(ev);
+  const textoEstudio = estudio ? `, no Estúdio ${estudio}` : "";
+  const nome = extrairNome(ev);
+  const saudacao = nome ? `Olá ${nome}, tudo bem? 😊` : "Olá, tudo bem? 😊";
+  return `${saudacao}\nPassando só pra confirmar seu ensaio de ${dataExtenso}, das ${hi} às ${hf}${textoEstudio}. Está tudo certinho e pago do nosso lado — te esperamos!\n${endereco}`;
+}
+
 async function coletarEventosPre(diasFrente = 360) {
   const agora = new Date();
   const limite = new Date(agora.getTime() + diasFrente * 24 * 60 * 60 * 1000);
@@ -279,7 +317,8 @@ async function coletarEventosPre(diasFrente = 360) {
       });
       for (const ev of (res.data.items || [])) {
         const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
-        if (/#?\s*\bzm\b/.test(alvo)) continue;
+        // "zm" puro = não cobrar (pula). "zm2" = confirmar presença (NÃO pula, entra na régua).
+        if (/\bzm\b/.test(alvo) && !/\bzm2\b/.test(alvo)) continue;
         if (/\[pago\b/.test(alvo)) continue;
         if (/\bpre\b/.test(alvo)) {
           achados.push({ ev, calId });
@@ -506,12 +545,14 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
 
   const paraCobrar = [];
   const paraCancelar = [];
+  const paraPresenca = []; // zm2 — confirma presença, não cobra sinal
   for (const item of achados) {
+    if (ehZm2(item.ev)) { paraPresenca.push(item); continue; }
     if (contarAvisos(item.ev) >= 2) paraCancelar.push(item);
     else paraCobrar.push(item);
   }
 
-  if (paraCobrar.length === 0 && paraCancelar.length === 0) {
+  if (paraCobrar.length === 0 && paraCancelar.length === 0 && paraPresenca.length === 0) {
     await sendMessage(destino, "Nenhuma reserva a processar hoje.");
     return;
   }
@@ -566,6 +607,24 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
     await esperar(500);
   }
 
+  // ✋ CONFIRMAÇÃO DE PRESENÇA (zm2) — não cobra sinal, só confirma se o ensaio vai rolar
+  if (paraPresenca.length > 0) {
+    await sendMessage(destino, `✋ ${paraPresenca.length} reserva(s) de *confirmar presença* (sem cobrança de sinal): 👇`);
+    for (const { ev, calId } of paraPresenca) {
+      try {
+        const tel = extrairTelefone((ev.summary || "") + " " + (ev.description || ""));
+        const msg = montarMensagemPresenca(ev, calId);
+        const inicio = new Date(ev.start.dateTime || ev.start.date);
+        const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'short', day: '2-digit', month: '2-digit' });
+        await sendMessage(destino, `━━━━━━━━━━\n✋ ${dataFmt} · ${rotuloEstudioEvento(ev)}${tel ? "" : " · ⚠️ SEM telefone"}`);
+        await enviarTextoELink(destino, msg, tel);
+      } catch (e) {
+        await sendMessage(destino, `⚠️ Erro na confirmação de "${ev.summary || "(sem título)"}": ${e.message}`);
+      }
+      await esperar(500);
+    }
+  }
+
   // 🔴 3º AVISO — reservas que já têm 2 avisos acumulados.
   // MUDANÇA DE SEGURANÇA: o bot NÃO move mais nada para Cancelados automaticamente.
   // Ele apenas ALERTA (sinal vermelho) para o admin decidir na mão.
@@ -590,7 +649,62 @@ async function rodarEnsaioConfirmacoes(marcar = false, destino = ADMIN_CHAT_ID) 
   const resumoCancel = paraCancelar.length
     ? `\n🔴 ${paraCancelar.length} reserva(s) no 3º aviso — precisam da sua decisão (NADA foi cancelado automaticamente).`
     : "";
-  await sendMessage(destino, `✅ Fim do relatório.${resumoMarca}${resumoCancel}`);
+  const resumoPresenca = paraPresenca.length
+    ? `\n✋ ${paraPresenca.length} confirmação(ões) de presença (zm2 — sem cobrança).`
+    : "";
+  await sendMessage(destino, `✅ Fim do relatório.${resumoMarca}${resumoCancel}${resumoPresenca}`);
+}
+
+// CONFIRMAÇÃO 48h — para quem JÁ PAGOU e tem ensaio em ~2 dias.
+// Roda às 9h. Não cobra nada: entrega mensagem simpática + link para o admin enviar (filtragem final é dele).
+async function rodarConfirmacao48h(destino = ADMIN_CHAT_ID) {
+  await sendMessage(destino, "🔎 Confirmação de presença (48h): procurando ensaios pagos para daqui a ~2 dias...");
+  const agora = new Date();
+  // janela: eventos que começam entre 36h e 60h a partir de agora (cobre "cerca de 48h", pega o dia todo do 2º dia)
+  const inicioJanela = new Date(agora.getTime() + 36 * 3600000);
+  const fimJanela = new Date(agora.getTime() + 60 * 3600000);
+  const encontrados = [];
+  for (const calId of CALENDAR_IDS.slice(0, 2)) {
+    try {
+      const res = await calendar.events.list({
+        calendarId: calId,
+        timeMin: inicioJanela.toISOString(),
+        timeMax: fimJanela.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+      for (const ev of (res.data.items || [])) {
+        const alvo = normalizar((ev.summary || "") + " " + (ev.description || ""));
+        // só quem JÁ PAGOU (tem marca de pago). Ignora zm puro e zm2 (esses têm régua própria).
+        const pago = /\[pago\b/.test(alvo) || /\bpago\b/.test(alvo);
+        if (!pago) continue;
+        if (/\bzm\b/.test(alvo) && !/\bzm2\b/.test(alvo)) continue; // zm puro fora
+        if (/\bzm2\b/.test(alvo)) continue; // zm2 já foi confirmado na régua das 8h
+        encontrados.push({ ev, calId });
+      }
+    } catch (e) { console.error(`Erro ao ler agenda (48h) ${calId}:`, e.message); }
+  }
+
+  if (encontrados.length === 0) {
+    await sendMessage(destino, "Nenhum ensaio pago para confirmar (48h). 👍");
+    return;
+  }
+
+  await sendMessage(destino, `✋ ${encontrados.length} ensaio(s) pago(s) para daqui a ~2 dias. Confira e envie os que fizerem sentido: 👇`);
+  for (const { ev, calId } of encontrados) {
+    try {
+      const tel = extrairTelefone((ev.summary || "") + " " + (ev.description || ""));
+      const msg = montarMensagem48hPago(ev, calId);
+      const inicio = new Date(ev.start.dateTime || ev.start.date);
+      const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
+      await sendMessage(destino, `━━━━━━━━━━\n✅ PAGO · ${dataFmt} · ${rotuloEstudioEvento(ev)}${tel ? "" : " · ⚠️ SEM telefone"}`);
+      await enviarTextoELink(destino, msg, tel);
+    } catch (e) {
+      await sendMessage(destino, `⚠️ Erro na confirmação 48h de "${ev.summary || "(sem título)"}": ${e.message}`);
+    }
+    await esperar(500);
+  }
+  await sendMessage(destino, "✅ Fim da confirmação de presença (48h).");
 }
 
 async function gerarRespostaGemini(chatId, pergunta, nomeUsuario = "Cliente") {
@@ -760,7 +874,7 @@ async function enviarResumoAgendamento(chatId, conversa) {
     linhas += `\n📅 ${dataFmt} · ${hi} às ${hf} · Estúdio ${r.estudio} (${r.unidade})`;
   }
   await sendMessage(chatId,
-    `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : (d.naoCobrar ? "🔕 não cobrar (marcado zm)" : "🔖 pré-reserva")}\n\n` +
+    `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : (d.naoCobrar ? "🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "✋ confirmar presença (não cobra sinal)" : "🔖 pré-reserva"))}\n\n` +
     `Responda *SIM* para confirmar ou *NÃO* para cancelar.`
   );
 }
@@ -774,6 +888,7 @@ async function criarEvento(dados) {
   if (dados.telefone) descricao += ` ${dados.telefone}`;
   if (dados.pago) descricao += `\npago R$${dados.pago}`;
   if (dados.naoCobrar) descricao += ` zm`; // marca de não-cobrar
+  if (dados.confirmarPresenca) descricao += ` zm2`; // marca de confirmar presença (não cobra sinal)
   const eventBody = {
     summary: titulo,
     description: descricao,
@@ -1614,7 +1729,7 @@ app.post("/webhook", async (req, res) => {
             d.telefone = d._telefoneSugerido;
             delete d._telefoneSugerido;
             conversa.passo = 'pagamento';
-            await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
+            await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
             return;
           }
           const num = textoOriginal.replace(/\D/g, "");
@@ -1622,7 +1737,7 @@ app.post("/webhook", async (req, res) => {
           d.telefone = num;
           delete d._telefoneSugerido;
           conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
+          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
           return;
         }
 
@@ -1631,7 +1746,7 @@ app.post("/webhook", async (req, res) => {
           if (num.length < 10) { await sendMessage(chatId, "⚠️ Telefone inválido. Digite com DDD (ex: 11999998888):"); return; }
           d.telefone = num;
           conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago' ou 'não cobrar'");
+          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
           return;
         }
 
@@ -1651,11 +1766,20 @@ app.post("/webhook", async (req, res) => {
           if (textoMensagem === 'nao cobrar' || textoMensagem === 'não cobrar' || textoMensagem === 'naocobrar' || textoMensagem === 'nao' || textoMensagem === 'não' || textoMensagem === 'zm') {
             d.pago = null;
             d.naoCobrar = true;
+            d.confirmarPresenca = false;
             conversa.passo = 'confirmar';
             await enviarResumoAgendamento(chatId, conversa);
             return;
           }
-          await sendMessage(chatId, "⚠️ Escreva 'pré', 'pago' ou 'não cobrar':");
+          if (textoMensagem === 'confirmar' || textoMensagem === 'confirma' || textoMensagem === 'presenca' || textoMensagem === 'presença' || textoMensagem === 'zm2') {
+            d.pago = null;
+            d.naoCobrar = false;
+            d.confirmarPresenca = true;
+            conversa.passo = 'confirmar';
+            await enviarResumoAgendamento(chatId, conversa);
+            return;
+          }
+          await sendMessage(chatId, "⚠️ Escreva 'pré', 'pago', 'não cobrar' ou 'confirmar':");
           return;
         }
 
@@ -1696,11 +1820,11 @@ app.post("/webhook", async (req, res) => {
             const titulos = [];
             try {
               for (const r of conversa.reservas) {
-                const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar });
+                const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar, confirmarPresenca: d.confirmarPresenca });
                 titulos.push(titulo);
               }
               const lista = titulos.map(t => `📌 ${t}`).join("\n");
-              const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : "\n🔖 pré-reserva");
+              const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "\n✋ confirmar presença (não cobra sinal)" : "\n🔖 pré-reserva"));
               await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
               await esperar(1500);
               const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
@@ -1753,6 +1877,10 @@ app.post("/webhook", async (req, res) => {
       }
       if (textoMensagem === '!testar') {
         await rodarEnsaioConfirmacoes(false, chatId);
+        return;
+      }
+      if (textoMensagem === '!confirmar48h' || textoMensagem === '!confirmar48') {
+        await rodarConfirmacao48h(chatId);
         return;
       }
       if (textoMensagem === '!rodarciclo') {
@@ -1893,6 +2021,16 @@ cron.schedule('0 8 * * *', async () => {
     await rodarEnsaioConfirmacoes(true, CHAT_MATINAL);
   } catch (e) {
     console.error("Erro no ciclo automático:", e.message);
+  }
+}, { timezone: "America/Sao_Paulo" });
+
+// 9h — confirmação de presença (48h) para quem já pagou
+cron.schedule('0 9 * * *', async () => {
+  console.log("⏰ Rodando a confirmação de presença das 9h...");
+  try {
+    await rodarConfirmacao48h(CHAT_MATINAL);
+  } catch (e) {
+    console.error("Erro na confirmação 48h:", e.message);
   }
 }, { timezone: "America/Sao_Paulo" });
 
