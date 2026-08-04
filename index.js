@@ -833,6 +833,72 @@ function extrairCamposAgendamento(texto) {
   return { datas, horario, estudio, telefone, nome };
 }
 
+// interpreta a frase inteira de agendamento com UMA chamada ao Gemini.
+// devolve { datas:[{dia,mes}], horario:{h1,m1,h2,m2}|null, estudio, nome, telefone } — campos faltantes vêm null.
+async function interpretarAgendamento(textoLivre) {
+  const bruto = (textoLivre || "").trim();
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+  const hojeSP = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [hAno, hMes, hDia] = hojeSP.split("-");
+  const diaSemHoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long" });
+  const prompt = `Você extrai dados de um pedido de agendamento de estúdio fotográfico e devolve SÓ um JSON.
+
+HOJE é ${hDia}/${hMes}/${hAno} (${diaSemHoje}). Use para calcular datas relativas (amanhã, quinta, sábado...). Um dia da semana sem indicação = a PRÓXIMA ocorrência a partir de hoje.
+
+Estúdios válidos: A, B, C, D, AB (unidade Aclimação) e 1, 2, 3 (unidade Bela Vista).
+
+Devolva um JSON com estes campos (use null quando não houver a informação):
+{
+  "datas": ["DD/MM", ...],        // uma ou mais datas concretas
+  "horario": "HH:MM-HH:MM",       // início e fim; entenda "das 13h30 às 17h30", "14-16", "9 as 11" etc.
+  "estudio": "A"|"B"|"C"|"D"|"AB"|"1"|"2"|"3",
+  "nome": "só o nome da pessoa",  // NUNCA inclua horário, telefone, data ou a palavra estúdio aqui
+  "telefone": "só dígitos"        // limpe +55, espaços, traços, parênteses. Ex.: 5512988147068
+}
+
+Regras:
+- "nome" deve conter APENAS o nome do cliente, limpo. Nada de "estúdio", horário ou números.
+- Se o telefone vier com +55 ou DDD, mantenha só os dígitos (ex.: "+55 12 98814-7068" -> "5512988147068").
+- Responda SOMENTE o JSON, sem texto antes ou depois, sem crases.
+
+PEDIDO: "${bruto}"
+JSON:`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    const data = await res.json();
+    let txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+    txt = txt.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const obj = JSON.parse(txt);
+    // normaliza para o formato interno
+    const datas = [];
+    for (const ds of (obj.datas || [])) {
+      const v = validarData(String(ds).trim());
+      if (v) datas.push(v);
+    }
+    let horario = null;
+    if (obj.horario) {
+      const h = validarHorario(String(obj.horario).replace(/\s/g, "").replace(/h/gi, ":").replace(/:(-|$)/g, "$1"));
+      if (h) horario = h;
+    }
+    let estudio = null;
+    if (obj.estudio && validarEstudio(String(obj.estudio))) estudio = String(obj.estudio).toUpperCase();
+    let telefone = null;
+    if (obj.telefone) {
+      const dig = String(obj.telefone).replace(/\D/g, "");
+      if (dig.length >= 10) telefone = dig.length <= 11 ? "55" + dig : dig;
+    }
+    const nome = obj.nome ? String(obj.nome).trim() : null;
+    return { datas, horario, estudio, telefone, nome, _ok: true };
+  } catch (e) {
+    console.error("Erro ao interpretar agendamento via Gemini:", e.message);
+    return { datas: [], horario: null, estudio: null, telefone: null, nome: null, _ok: false };
+  }
+}
+
 function montarDatas(dados) {
   const agora = new Date();
   let ano = agora.getFullYear();
@@ -1761,10 +1827,9 @@ app.post("/webhook", async (req, res) => {
       if (/^!agendar\s+\S/.test(textoOriginal) && !/^!agendar\s+\d+$/.test(textoMensagem)) {
         const bruto = textoOriginal.replace(/^!agendar\s+/i, "").trim();
         await sendMessage(chatId, "🔎 Entendendo os dados, um instante...");
-        const textoComDatas = await normalizarDatasNaturais(bruto);
-        const campos = extrairCamposAgendamento(textoComDatas);
+        const campos = await interpretarAgendamento(bruto);
 
-        if (campos.datas.length === 0 && !campos.horario && !campos.estudio) {
+        if (campos.datas.length === 0 && !campos.horario && !campos.estudio && !campos.nome && !campos.telefone) {
           // não deu pra extrair nada útil — cai no passo a passo normal
           conversasAgendamento[chatId] = { passo: 'data', qtd: 1, reservas: [], dados: {} };
           await sendMessage(chatId, "Não consegui entender os dados soltos. Vamos passo a passo. 😊\n\nQual a *data*? (ex: 25/07)");
