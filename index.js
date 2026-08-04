@@ -777,6 +777,62 @@ function validarEstudio(txt) {
   return { estudio, ...ag };
 }
 
+// usa o Gemini para trocar datas em linguagem natural (amanhã, quinta, sábado) por DD/MM,
+// mantendo o resto do texto igual. Retorna o texto com as datas já convertidas.
+async function normalizarDatasNaturais(texto) {
+  if (!texto || !texto.trim()) return texto;
+  // se já não tem nada que pareça dia da semana / "amanha" / "hoje", nem chama o Gemini
+  if (!/\b(hoje|amanha|amanhã|depois de amanha|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)\b/i.test(texto)) return texto;
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
+  const hojeSP = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [hAno, hMes, hDia] = hojeSP.split("-");
+  const diaSemHoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: "long" });
+  const prompt = `HOJE é ${hDia}/${hMes}/${hAno} (${diaSemHoje}).
+No texto abaixo, troque QUALQUER referência a dia (hoje, amanhã, depois de amanhã, segunda, terça, quarta, quinta, sexta, sábado, domingo) pela data concreta no formato DD/MM. Um dia da semana sem indicação = a PRÓXIMA ocorrência dele a partir de hoje (mesmo que seja semana que vem). Mantenha todo o resto do texto EXATAMENTE igual, na mesma ordem. Se houver vários dias, troque todos.
+Responda APENAS o texto resultante, sem aspas, sem explicação.
+
+Exemplos (se hoje fosse 31/07/2026, quinta):
+"amanhã 14-16 A João" -> "01/08 14-16 A João"
+"quinta 10-12 1 Maria" -> "07/08 10-12 1 Maria"
+"amanha quarta e quinta 10-12 A João" -> "01/08 05/08 06/08 10-12 A João"
+
+TEXTO: "${texto}"
+RESULTADO:`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    const data = await res.json();
+    const out = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    return out || texto;
+  } catch (e) {
+    console.error("Erro ao normalizar datas naturais:", e.message);
+    return texto;
+  }
+}
+
+// extrai data(s), horário, estúdio, telefone e nome de um texto solto (em qualquer ordem).
+// datas já devem estar em DD/MM (use normalizarDatasNaturais antes).
+function extrairCamposAgendamento(texto) {
+  const tokens = (texto || "").trim().split(/\s+/).filter(Boolean);
+  const codigosEstudio = ["AB", "A", "B", "C", "D", "1", "2", "3"];
+  const datas = [];
+  let horario = null, estudio = null, telefone = null;
+  const sobra = [];
+  for (const tok of tokens) {
+    if (/^\d{1,2}\/\d{1,2}$/.test(tok)) { const v = validarData(tok); if (v) { datas.push(v); continue; } }
+    if (validarHorario(tok)) { horario = validarHorario(tok); continue; }
+    if (!estudio && codigosEstudio.includes(tok.toUpperCase())) { estudio = tok.toUpperCase(); continue; }
+    const digitos = tok.replace(/\D/g, "");
+    if (digitos.length >= 10 && !telefone) { telefone = digitos; continue; }
+    sobra.push(tok);
+  }
+  const nome = sobra.join(" ").trim() || null;
+  return { datas, horario, estudio, telefone, nome };
+}
+
 function montarDatas(dados) {
   const agora = new Date();
   let ano = agora.getFullYear();
@@ -877,6 +933,48 @@ async function enviarResumoAgendamento(chatId, conversa) {
     `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : (d.naoCobrar ? "🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "✋ confirmar presença (não cobra sinal)" : "🔖 pré-reserva"))}\n\n` +
     `Responda *SIM* para confirmar ou *NÃO* para cancelar.`
   );
+}
+
+// decide o próximo campo faltante no agendamento rápido e pergunta só ele.
+// ordem: data(s) -> horário -> estúdio -> nome -> telefone -> tipo -> confirmação final
+async function avancarAgendamentoRapido(chatId, conversa) {
+  const d = conversa.dados;
+  if (!conversa.reservas || conversa.reservas.length === 0) {
+    conversa.qtd = 1; conversa.passo = 'data';
+    await sendMessage(chatId, "📅 Qual a *data*? (ex: 25/07)");
+    return;
+  }
+  if (conversa.reservas.some(r => r.h1 === undefined)) {
+    conversa.passo = 'faltaHorario';
+    await sendMessage(chatId, "🕐 Qual o *horário*? (ex: 14-16 ou 14:30-16:30)");
+    return;
+  }
+  if (conversa.reservas.some(r => !r.estudio)) {
+    conversa.passo = 'faltaEstudio';
+    await sendMessage(chatId, "📸 Qual o *estúdio*?\n\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3");
+    return;
+  }
+  if (!d.nome) {
+    conversa.passo = 'nome';
+    await sendMessage(chatId, "👤 Qual o *nome* do cliente?");
+    return;
+  }
+  if (!d.telefone) {
+    let conhecido = await buscarTelefoneConhecido(d.nome);
+    if (!conhecido) conhecido = await buscarContatoGoogle(d.nome);
+    if (conhecido) {
+      d._telefoneSugerido = conhecido.telefone;
+      conversa.passo = 'confirmarTelefoneConhecido';
+      const origemTxt = conhecido.origem ? ` (${conhecido.origem})` : " em outra reserva";
+      await sendMessage(chatId, `📱 Já tenho o telefone *${conhecido.telefone}* de "${conhecido.nome}"${origemTxt}.\nÉ esse mesmo? Responda *SIM* ou digite o telefone correto.`);
+      return;
+    }
+    conversa.passo = 'telefone';
+    await sendMessage(chatId, "📞 Qual o *telefone*? (com DDD, ex: 11999998888)");
+    return;
+  }
+  conversa.passo = 'pagamento';
+  await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago*, é pra *não cobrar* ou só *confirmar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
 }
 
 const COR_POR_ESTUDIO = { C: "1", D: "4", "2": "2", "3": "7" };
@@ -1659,6 +1757,50 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
+      // !agendar COM dados soltos (ex.: "!agendar amanhã 14-16 A João 11999998888")
+      if (/^!agendar\s+\S/.test(textoOriginal) && !/^!agendar\s+\d+$/.test(textoMensagem)) {
+        const bruto = textoOriginal.replace(/^!agendar\s+/i, "").trim();
+        await sendMessage(chatId, "🔎 Entendendo os dados, um instante...");
+        const textoComDatas = await normalizarDatasNaturais(bruto);
+        const campos = extrairCamposAgendamento(textoComDatas);
+
+        if (campos.datas.length === 0 && !campos.horario && !campos.estudio) {
+          // não deu pra extrair nada útil — cai no passo a passo normal
+          conversasAgendamento[chatId] = { passo: 'data', qtd: 1, reservas: [], dados: {} };
+          await sendMessage(chatId, "Não consegui entender os dados soltos. Vamos passo a passo. 😊\n\nQual a *data*? (ex: 25/07)");
+          return;
+        }
+
+        // monta as reservas a partir das datas (todas com o mesmo horário/estúdio, se informados)
+        const conversa = { passo: null, qtd: Math.max(1, campos.datas.length), reservas: [], dados: {}, rapido: true, penduraHorEst: {} };
+        const est = campos.estudio ? validarEstudio(campos.estudio) : null;
+        if (campos.datas.length > 0) {
+          for (const dt of campos.datas) {
+            const r = { dia: dt.dia, mes: dt.mes };
+            if (campos.horario) { r.h1 = campos.horario.h1; r.m1 = campos.horario.m1; r.h2 = campos.horario.h2; r.m2 = campos.horario.m2; }
+            if (est) { r.estudio = est.estudio; r.calId = est.calId; r.unidade = est.unidade; }
+            conversa.reservas.push(r);
+          }
+        }
+        conversa.penduraHorEst = { horario: campos.horario || null, est: est || null };
+        if (campos.nome) conversa.dados.nome = campos.nome;
+        if (campos.telefone) conversa.dados.telefone = campos.telefone;
+
+        // resumo do que entendeu
+        const linhas = [];
+        if (campos.datas.length) linhas.push(`📅 ${campos.datas.map(d => `${String(d.dia).padStart(2,"0")}/${String(d.mes).padStart(2,"0")}`).join(", ")}`);
+        else linhas.push("📅 (faltando)");
+        linhas.push(campos.horario ? `🕐 ${campos.horario.h1}${campos.horario.m1?":"+String(campos.horario.m1).padStart(2,"0"):""}-${campos.horario.h2}${campos.horario.m2?":"+String(campos.horario.m2).padStart(2,"0"):""}` : "🕐 (faltando)");
+        linhas.push(est ? `📸 Estúdio ${est.estudio} (${est.unidade})` : "📸 (faltando)");
+        linhas.push(campos.nome ? `👤 ${campos.nome}` : "👤 (faltando)");
+        linhas.push(campos.telefone ? `📞 ${campos.telefone}` : "📞 (faltando)");
+        conversasAgendamento[chatId] = conversa;
+
+        await sendMessage(chatId, `📋 Entendi assim:\n${linhas.join("\n")}\n\nSe estiver certo, responda *ok* para continuar. Se algo ficou errado, escreva *cancelar* e faça de novo.`);
+        conversa.passo = 'confirmarRapido';
+        return;
+      }
+
       if (textoMensagem === '!agendar' || /^!agendar\s+\d+$/.test(textoMensagem)) {
         const mQtd = textoMensagem.match(/^!agendar\s+(\d+)$/);
         const qtd = mQtd ? Math.max(1, Math.min(10, parseInt(mQtd[1]))) : 1;
@@ -1671,6 +1813,34 @@ app.post("/webhook", async (req, res) => {
       if (conversasAgendamento[chatId]) {
         const conversa = conversasAgendamento[chatId];
         const d = conversa.dados;
+
+        // fluxo do agendamento rápido: confirma o que entendeu, depois pergunta só o que falta
+        if (conversa.passo === 'confirmarRapido') {
+          if (textoMensagem !== 'ok' && textoMensagem !== 'sim') {
+            await sendMessage(chatId, "Se estiver certo, responda *ok*. Para recomeçar, *cancelar*.");
+            return;
+          }
+          // decide o que falta e encaminha
+          await avancarAgendamentoRapido(chatId, conversa);
+          return;
+        }
+
+        // completa horário que faltava (vale para todas as reservas)
+        if (conversa.passo === 'faltaHorario') {
+          const v = validarHorario(textoOriginal);
+          if (!v) { await sendMessage(chatId, "⚠️ Horário inválido. Use HH-HH (ex: 14-16). Tente de novo:"); return; }
+          for (const r of conversa.reservas) { r.h1 = v.h1; r.m1 = v.m1; r.h2 = v.h2; r.m2 = v.m2; }
+          await avancarAgendamentoRapido(chatId, conversa);
+          return;
+        }
+        // completa estúdio que faltava
+        if (conversa.passo === 'faltaEstudio') {
+          const v = validarEstudio(textoOriginal);
+          if (!v) { await sendMessage(chatId, "⚠️ Estúdio inválido. A, B, C, D, AB, 1, 2 ou 3. Tente de novo:"); return; }
+          for (const r of conversa.reservas) { r.estudio = v.estudio; r.calId = v.calId; r.unidade = v.unidade; }
+          await avancarAgendamentoRapido(chatId, conversa);
+          return;
+        }
 
         if (conversa.passo === 'data') {
           const v = validarData(textoOriginal);
