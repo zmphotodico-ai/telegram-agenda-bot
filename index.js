@@ -852,12 +852,14 @@ Devolva um JSON com estes campos (use null quando não houver a informação):
   "datas": ["DD/MM", ...],        // uma ou mais datas concretas
   "horario": "HH:MM-HH:MM",       // início e fim; entenda "das 13h30 às 17h30", "14-16", "9 as 11" etc.
   "estudio": "A"|"B"|"C"|"D"|"AB"|"1"|"2"|"3",
-  "nome": "só o nome da pessoa",  // NUNCA inclua horário, telefone, data ou a palavra estúdio aqui
-  "telefone": "só dígitos"        // limpe +55, espaços, traços, parênteses. Ex.: 5512988147068
+  "nome": "só o nome da pessoa",  // NUNCA inclua horário, telefone, data, tipo ou a palavra estúdio aqui
+  "telefone": "só dígitos",       // limpe +55, espaços, traços, parênteses. Ex.: 5512988147068
+  "tipo": "pre"|"pago"|"zm"|"zm2"|null  // se o texto disser: zm (não cobrar), zm2 (confirmar presença), pago, ou pré
 }
 
 Regras:
-- "nome" deve conter APENAS o nome do cliente, limpo. Nada de "estúdio", horário ou números.
+- "nome" deve conter APENAS o nome do cliente, limpo. Nada de "estúdio", horário, números ou palavras como "zm", "zm2", "pago", "pré".
+- Se o texto tiver "zm2" -> tipo "zm2". Se tiver "zm" (sem o 2) -> tipo "zm". Se disser "pago" -> "pago". Caso contrário deixe tipo null.
 - Se o telefone vier com +55 ou DDD, mantenha só os dígitos (ex.: "+55 12 98814-7068" -> "5512988147068").
 - Responda SOMENTE o JSON, sem texto antes ou depois, sem crases.
 
@@ -892,10 +894,15 @@ JSON:`;
       if (dig.length >= 10) telefone = dig.length <= 11 ? "55" + dig : dig;
     }
     const nome = obj.nome ? String(obj.nome).trim() : null;
-    return { datas, horario, estudio, telefone, nome, _ok: true };
+    let tipo = null;
+    if (obj.tipo) {
+      const t = String(obj.tipo).toLowerCase().trim();
+      if (["pre", "pré", "pago", "zm", "zm2"].includes(t)) tipo = t === "pré" ? "pre" : t;
+    }
+    return { datas, horario, estudio, telefone, nome, tipo, _ok: true };
   } catch (e) {
     console.error("Erro ao interpretar agendamento via Gemini:", e.message);
-    return { datas: [], horario: null, estudio: null, telefone: null, nome: null, _ok: false };
+    return { datas: [], horario: null, estudio: null, telefone: null, nome: null, tipo: null, _ok: false };
   }
 }
 
@@ -1037,6 +1044,12 @@ async function avancarAgendamentoRapido(chatId, conversa) {
     }
     conversa.passo = 'telefone';
     await sendMessage(chatId, "📞 Qual o *telefone*? (com DDD, ex: 11999998888)");
+    return;
+  }
+  // 6) falta o tipo (pré/pago/não cobrar/confirmar)? Se já veio no texto (zm/zm2/pré), vai direto ao resumo
+  if (d.naoCobrar || d.confirmarPresenca || (d.pago === null && conversa._tipoDefinido)) {
+    conversa.passo = 'confirmar';
+    await enviarResumoAgendamento(chatId, conversa);
     return;
   }
   conversa.passo = 'pagamento';
@@ -1494,6 +1507,13 @@ function faixaNoPeriodo(faixa, ano, mes, dia, periodo) {
   return faixa.ini < pFim && faixa.fim > pIni;
 }
 
+// true se a faixa comporta a duração mínima pedida (em horas)
+function faixaComportaDuracao(faixa, duracaoMinHoras) {
+  if (!duracaoMinHoras) return true;
+  const horas = (faixa.fim - faixa.ini) / 3600000;
+  return horas >= duracaoMinHoras;
+}
+
 function estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro) {
   if (estudioFiltro) return [estudioFiltro];
   if (unidadeFiltro === "aclimacao") return ["A", "B", "C", "D", "AB"];
@@ -1518,6 +1538,7 @@ Peças possíveis do comando:
 - "livre" (se o pedido é sobre horários vagos/livres)
 - Período do dia: "manha", "tarde" ou "noite"
 - Horário exato: HH:MM
+- Duração mínima: se o cliente cita quanto tempo quer ("2h", "2-3h", "3 horas", "umas 2 horas"), devolva "dur:N" onde N é o MENOR número de horas. Ex.: "2-3h" -> dur:2 ; "3 horas" -> dur:3
 - DATAS: sempre no formato DD/MM, várias separadas por vírgula SEM espaço (ex.: 02/08,09/08,16/08)
 
 REGRA IMPORTANTE sobre datas: se o pedido mencionar dia(s) da semana ("sábados", "domingo"), um mês ("agosto"), "quinzena", "próximos N ...", ou qualquer intervalo, VOCÊ MESMO calcula as datas concretas e devolve a lista em DD/MM. Não invente palavras como "agosto" ou "sabados" no comando — devolva as datas já calculadas.
@@ -1536,6 +1557,8 @@ Exemplos (assumindo que hoje seja 31/07/2026):
 "agosto inteiro estúdio C" -> C livre 01/08,02/08,03/08,04/08,05/08,06/08,07/08,08/08,09/08,10/08,11/08,12/08,13/08,14/08,15/08,16/08,17/08,18/08,19/08,20/08,21/08,22/08,23/08,24/08,25/08,26/08,27/08,28/08,29/08,30/08,31/08
 "próximos 3 domingos bela vista" -> belavista livre 03/08,10/08,17/08
 "vagos estúdio 2 à tarde nas segundas de agosto" -> 2 livre 03/08,10/08,17/08,24/08,31/08 tarde
+"tem estúdio B dia 13 à tarde por umas 2-3h" -> B livre 13/08 tarde dur:2
+"sábado que vem preciso de 3 horas na bela vista" -> belavista livre SABADO dur:3
 
 PEDIDO: "${textoLivre}"
 COMANDO:`;
@@ -1561,7 +1584,7 @@ async function consultarAgenda(argsTexto, destino) {
     .replace(/proxima\s+semana|próxima\s+semana/gi, "semanaquevem");
   const tokens = argsNormalizado.trim().split(/\s+/).filter(Boolean);
   const codigosEstudio = ["AB", "A", "B", "C", "D", "1", "2", "3"];
-  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null, periodo = null;
+  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null, periodo = null, duracaoMin = null;
   const hojeInfo = new Date();
   const hojeStr = hojeInfo.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
   const [hojeAno, hojeMes, hojeDia] = hojeStr.split("-").map(Number);
@@ -1574,6 +1597,8 @@ async function consultarAgenda(argsTexto, destino) {
     if (tokNorm === "manha" || tokNorm === "manhas") { periodo = { nome: "manhã", ini: 7, fim: 13 }; continue; }
     if (tokNorm === "tarde" || tokNorm === "tardes") { periodo = { nome: "tarde", ini: 13, fim: 18 }; continue; }
     if (tokNorm === "noite" || tokNorm === "noites") { periodo = { nome: "noite", ini: 18, fim: 23 }; continue; }
+    const mDur = tokNorm.match(/^dur:(\d{1,2})$/);
+    if (mDur) { duracaoMin = Math.max(2, parseInt(mDur[1])); continue; }
     if (tokNorm === "hoje") { datas.push({ dia: hojeDia, mes: hojeMes }); continue; }
     if (tokNorm === "aclimacao") { unidadeFiltro = "aclimacao"; continue; }
     if (tokNorm === "belavista") { unidadeFiltro = "belavista"; continue; }
@@ -1658,6 +1683,7 @@ async function consultarAgenda(argsTexto, destino) {
           const eventosDoEstudio = eventosParaLivres.filter(ev => conflitantes.includes(extrairEstudio(ev)));
           let livres = calcularHorariosLivres(eventosDoEstudio, ano, d.mes, d.dia);
           if (periodo) livres = livres.filter(l => faixaNoPeriodo(l, ano, d.mes, d.dia, periodo));
+          if (duracaoMin) livres = livres.filter(l => faixaComportaDuracao(l, duracaoMin));
           if (livres.length > 0) {
             const linhasLivres = livres.map(l => formatarFaixaLivre(l)).join(" ou ");
             if (linhasLivres.includes("⚠️")) temAviso = true;
@@ -1729,6 +1755,7 @@ async function consultarAgenda(argsTexto, destino) {
         });
         let livres = calcularHorariosLivres(eventosDoDiaEstudio, a, m, dd);
         if (periodo) livres = livres.filter(l => faixaNoPeriodo(l, a, m, dd, periodo));
+        if (duracaoMin) livres = livres.filter(l => faixaComportaDuracao(l, duracaoMin));
         if (livres.length > 0) {
           const faixas = livres.map(l => formatarFaixaLivre(l)).join(" ou ");
           linhasDia.push(`  ${rotuloEstudioCodigo(est)}: ${faixas}`);
@@ -1850,6 +1877,11 @@ app.post("/webhook", async (req, res) => {
         conversa.penduraHorEst = { horario: campos.horario || null, est: est || null };
         if (campos.nome) conversa.dados.nome = campos.nome;
         if (campos.telefone) conversa.dados.telefone = campos.telefone;
+        // tipo veio no texto? (zm/zm2/pago/pre) já preenche pra pular a pergunta depois
+        if (campos.tipo === 'zm') { conversa.dados.naoCobrar = true; conversa.dados.confirmarPresenca = false; conversa.dados.pago = null; }
+        else if (campos.tipo === 'zm2') { conversa.dados.confirmarPresenca = true; conversa.dados.naoCobrar = false; conversa.dados.pago = null; }
+        else if (campos.tipo === 'pre') { conversa.dados.pago = null; conversa.dados.naoCobrar = false; conversa.dados.confirmarPresenca = false; conversa._tipoDefinido = true; }
+        // "pago" precisa do valor, então não pré-preenche aqui (deixa perguntar o valor)
 
         // resumo do que entendeu
         const linhas = [];
@@ -1859,6 +1891,9 @@ app.post("/webhook", async (req, res) => {
         linhas.push(est ? `📸 Estúdio ${est.estudio} (${est.unidade})` : "📸 (faltando)");
         linhas.push(campos.nome ? `👤 ${campos.nome}` : "👤 (faltando)");
         linhas.push(campos.telefone ? `📞 ${campos.telefone}` : "📞 (faltando)");
+        if (campos.tipo === 'zm') linhas.push("🔕 não cobrar (zm)");
+        else if (campos.tipo === 'zm2') linhas.push("✋ confirmar presença (zm2)");
+        else if (campos.tipo === 'pre') linhas.push("🔖 pré-reserva");
         conversasAgendamento[chatId] = conversa;
 
         await sendMessage(chatId, `📋 Entendi assim:\n${linhas.join("\n")}\n\nSe estiver certo, responda *ok* para continuar. Se algo ficou errado, escreva *cancelar* e faça de novo.`);
