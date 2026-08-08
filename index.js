@@ -298,7 +298,7 @@ function montarMensagem48hPago(ev, calId) {
   const textoEstudio = estudio ? `, no Estúdio ${estudio}` : "";
   const nome = extrairNome(ev);
   const saudacao = nome ? `Olá ${nome}, tudo bem? 😊` : "Olá, tudo bem? 😊";
-  return `${saudacao}\nPassando só pra confirmar seu ensaio de ${dataExtenso}, das ${hi} às ${hf}${textoEstudio}. Está tudo certinho e pago do nosso lado — te esperamos!\n${endereco}`;
+  return `${saudacao}\nPassando pra lembrar do seu ensaio de ${dataExtenso}, das ${hi} às ${hf}${textoEstudio}. Sua reserva está confirmada!\n${endereco}\nNos vemos lá 😊`;
 }
 
 async function coletarEventosPre(diasFrente = 360) {
