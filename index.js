@@ -1514,6 +1514,41 @@ function faixaComportaDuracao(faixa, duracaoMinHoras) {
   return horas >= duracaoMinHoras;
 }
 
+// retorna os vãos livres CRUS (sem desconto de folga) — usado para avaliar janela específica
+function calcularVaosCrus(eventosDoEstudio, ano, mes, dia, horaOperInicio = 7, horaOperFim = 23) {
+  const inicioOp = dataHoraSP(ano, mes, dia, horaOperInicio, 0);
+  const fimOp = dataHoraSP(ano, mes, dia, horaOperFim, 0);
+  const ocupados = eventosDoEstudio
+    .map(ev => ({ ini: new Date(ev.start.dateTime || ev.start.date), fim: new Date(ev.end.dateTime || ev.end.date) }))
+    .filter(o => o.fim > inicioOp && o.ini < fimOp)
+    .sort((a, b) => a.ini - b.ini);
+  const vaos = [];
+  let cursor = inicioOp;
+  for (const o of ocupados) {
+    if (o.ini > cursor) vaos.push({ ini: cursor, fim: o.ini });
+    if (o.fim > cursor) cursor = o.fim;
+  }
+  if (fimOp > cursor) vaos.push({ ini: cursor, fim: fimOp });
+  return vaos;
+}
+
+// avalia se o estúdio está livre numa janela específica (jIni-jFim), usando os vãos crus.
+// Retorna { cobre: bool, justo: bool } — justo = cobre mas sem os 30min de folga de cada lado.
+function estudioNaJanela(vaosCrus, ano, mes, dia, janela) {
+  const jIni = dataHoraSP(ano, mes, dia, janela.h1, janela.m1);
+  const jFim = dataHoraSP(ano, mes, dia, janela.h2, janela.m2);
+  const FOLGA = 30 * 60000;
+  for (const v of vaosCrus) {
+    if (v.ini <= jIni && v.fim >= jFim) {
+      const folgaAntes = (jIni - v.ini) >= FOLGA;
+      const folgaDepois = (v.fim - jFim) >= FOLGA;
+      const justo = !(folgaAntes && folgaDepois);
+      return { cobre: true, justo };
+    }
+  }
+  return { cobre: false, justo: false };
+}
+
 function estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro) {
   if (estudioFiltro) return [estudioFiltro];
   if (unidadeFiltro === "aclimacao") return ["A", "B", "C", "D", "AB"];
@@ -1584,7 +1619,7 @@ async function consultarAgenda(argsTexto, destino) {
     .replace(/proxima\s+semana|próxima\s+semana/gi, "semanaquevem");
   const tokens = argsNormalizado.trim().split(/\s+/).filter(Boolean);
   const codigosEstudio = ["AB", "A", "B", "C", "D", "1", "2", "3"];
-  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null, periodo = null, duracaoMin = null;
+  let estudioFiltro = null, unidadeFiltro = null, semana = false, proximaSemana = false, apenasLivre = false, datas = [], horario = null, periodo = null, duracaoMin = null, janela = null;
   const hojeInfo = new Date();
   const hojeStr = hojeInfo.toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
   const [hojeAno, hojeMes, hojeDia] = hojeStr.split("-").map(Number);
@@ -1608,6 +1643,9 @@ async function consultarAgenda(argsTexto, destino) {
       for (const p of tok.split(",")) { const v = validarData(p); if (v) datas.push(v); }
       continue;
     }
+    // janela de horário: HH:MM-HH:MM (ex.: 10:00-13:00, 10-13)
+    const vj = validarHorario(tok);
+    if (vj) { janela = vj; continue; }
     const vh = parseHorarioSimples(tok);
     if (vh) { horario = vh; continue; }
   }
@@ -1642,6 +1680,39 @@ async function consultarAgenda(argsTexto, destino) {
 
   const nomeUnidade = { aclimacao: "Aclimação", belavista: "Bela Vista" };
   const rotuloFiltro = estudioFiltro ? ` — ${rotuloEstudioCodigo(estudioFiltro)}` : (unidadeFiltro ? ` — ${nomeUnidade[unidadeFiltro]}` : "");
+
+  // MODO JANELA: data(s) + janela de horário -> mostra só os estúdios livres NAQUELA janela
+  if (datas.length > 0 && janela) {
+    const estudiosParaLivres = estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro);
+    datas.sort((a, b) => (a.mes - b.mes) || (a.dia - b.dia));
+    const jTxt = `${String(janela.h1).padStart(2,"0")}:${String(janela.m1).padStart(2,"0")}-${String(janela.h2).padStart(2,"0")}:${String(janela.m2).padStart(2,"0")}`;
+    const blocos = [];
+    let temJusto = false;
+    for (const d of datas) {
+      const inicio = dataHoraSP(ano, d.mes, d.dia, 0, 0);
+      const fim = dataHoraSP(ano, d.mes, d.dia, 23, 59);
+      const eventosTodos = await listarAgendaFiltrada(calIds, null, inicio, fim);
+      const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'long', day: '2-digit', month: '2-digit' });
+      const disponiveis = [];
+      for (const est of estudiosParaLivres) {
+        const conflitantes = estudiosConflitantes(est);
+        const eventosDoEstudio = eventosTodos.filter(ev => conflitantes.includes(extrairEstudio(ev)));
+        const vaos = calcularVaosCrus(eventosDoEstudio, ano, d.mes, d.dia);
+        const r = estudioNaJanela(vaos, ano, d.mes, d.dia, janela);
+        if (r.cobre) {
+          if (r.justo) temJusto = true;
+          disponiveis.push(`  ${rotuloEstudioCodigo(est)}${r.justo ? " ⚠️" : ""}`);
+        }
+      }
+      let bloco = `📅 *${dataFmt}* · ${jTxt}${rotuloFiltro}:\n`;
+      bloco += disponiveis.length > 0 ? disponiveis.join("\n") : "  (nenhum estúdio livre nesse horário)";
+      blocos.push(bloco);
+    }
+    let msg = blocos.join("\n\n");
+    if (temJusto) msg += "\n\n⚠️ horário justo — livre nesse intervalo, mas sem os 30 min de folga de troca";
+    await sendMessage(destino, msg.trim());
+    return;
+  }
 
   if (datas.length > 0) {
     const estudiosParaLivres = estudiosParaAnaliseLivre(estudioFiltro, unidadeFiltro);
