@@ -2435,6 +2435,19 @@ app.get("/disponibilidade", async (req, res) => {
 });
 // ===================== fim do bloco da agenda do site =====================
 
+// ===================== página da agenda do site (para o iframe) =====================
+import { readFileSync } from "fs";
+app.get("/agenda", (req, res) => {
+  try {
+    res.set("Cache-Control", "public, max-age=300");
+    res.type("html").send(readFileSync(new URL("./agenda.html", import.meta.url), "utf8"));
+  } catch (e) {
+    console.error("Erro /agenda:", e.message);
+    res.status(500).send("Agenda indisponível no momento.");
+  }
+});
+// ===================== fim da página da agenda =====================
+
 app.get('/', (req, res) => res.send('Bot Telegram ZM Photo — Online'));
 
 app.get('/setup', async (req, res) => {

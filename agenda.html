@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agenda de horários · Estúdio ZM Photo</title>
+<style>html,body{margin:0;padding:0;background:#fff}body{padding:12px 12px 24px}</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,600;9..40,700&family=Space+Grotesk:wght@600&display=swap">
+<style>
+#zm-agenda{font-family:'DM Sans',system-ui,-apple-system,'Segoe UI',sans-serif;color:#16181D;max-width:1200px;margin:0 auto;padding:8px 0 24px;font-size:15px;line-height:1.35;text-align:left}
+#zm-agenda *{box-sizing:border-box}
+#zm-agenda button{font:inherit;margin:0;cursor:pointer;text-transform:none;letter-spacing:normal;line-height:1.2;box-shadow:none;text-shadow:none;width:auto;height:auto}
+#zm-agenda h2,#zm-agenda h3,#zm-agenda p{margin:0;padding:0;border:0;text-transform:none;letter-spacing:normal}
+#zm-agenda .zma-top{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+#zm-agenda .zma-h1{font-family:'Space Grotesk','DM Sans',sans-serif;font-size:28px;font-weight:600;color:#16181D;line-height:1.15}
+#zm-agenda .zma-sub{color:#4A5059;font-size:15px}
+#zm-agenda .zma-card{background:#fff;border:1px solid #E3E6EA;border-radius:16px;padding:16px;margin-bottom:16px}
+#zm-agenda .zma-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+#zm-agenda .zma-seg{display:inline-flex;flex-wrap:wrap;gap:4px;padding:4px;background:#F1F2F4;border-radius:12px}
+#zm-agenda .zma-seg button{min-height:40px;padding:0 16px;border:0;border-radius:9px;background:transparent;color:#2A2E35;font-weight:600;font-size:14px}
+#zm-agenda .zma-seg button[aria-pressed="true"]{background:#16181D;color:#fff}
+#zm-agenda .zma-seg.zma-light button[aria-pressed="true"]{background:#fff;color:#16181D;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+#zm-agenda .zma-chips{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px}
+#zm-agenda .zma-lbl{font-size:13px;color:#5B616B;margin-right:2px}
+#zm-agenda .zma-chip{min-height:38px;padding:0 14px;border-radius:999px;border:1px solid #D5D9DF;background:#fff;color:#2A2E35;font-weight:600;font-size:14px}
+#zm-agenda .zma-chip[aria-pressed="true"]{background:#16181D;border-color:#16181D;color:#fff}
+#zm-agenda .zma-nav{display:inline-flex;align-items:center;gap:6px}
+#zm-agenda .zma-nav button{min-width:40px;height:40px;padding:0 12px;border-radius:10px;border:1px solid #D5D9DF;background:#fff;color:#16181D;font-weight:600;font-size:14px}
+#zm-agenda .zma-nav button[disabled]{opacity:.35;cursor:default}
+#zm-agenda .zma-navlbl{min-width:150px;text-align:center;font-weight:600;font-size:15px}
+#zm-agenda .zma-legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:14px;padding-top:12px;border-top:1px solid #EEF0F2;font-size:13px;color:#3A3F47}
+#zm-agenda .zma-legend span{display:inline-flex;align-items:center;gap:7px}
+#zm-agenda .zma-sw{width:16px;height:16px;border-radius:5px;border:1px solid;display:inline-block}
+#zm-agenda .zma-bhead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:6px;margin-bottom:12px}
+#zm-agenda .zma-bt{font-family:'Space Grotesk','DM Sans',sans-serif;font-size:20px;font-weight:600}
+#zm-agenda .zma-bs{font-size:13px;color:#5B616B}
+#zm-agenda .zma-free{font-size:13px;font-weight:700;color:#0B6B55}
+#zm-agenda .zma-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#zm-agenda .zma-grid{display:grid;grid-template-columns:52px repeat(7,minmax(92px,1fr));gap:4px;min-width:740px}
+#zm-agenda .zma-dh{padding:2px 4px 6px;display:flex;flex-direction:column;gap:1px}
+#zm-agenda .zma-dh small{font-size:12px;color:#5B616B;text-transform:capitalize}
+#zm-agenda .zma-dh b{font-size:16px;display:inline-flex;align-items:center;gap:6px}
+#zm-agenda .zma-today{font-size:10px;font-weight:700;color:#1F3FBF;background:#EEF2FF;padding:2px 6px;border-radius:999px}
+#zm-agenda .zma-t{font-size:12px;color:#5B616B;padding-top:6px;font-variant-numeric:tabular-nums}
+#zm-agenda .zma-c{height:50px;width:100%;border-radius:8px;border:1px solid;padding:5px 7px;font-size:12px;display:flex;flex-direction:column;justify-content:center;gap:3px;text-align:left;overflow:hidden}
+#zm-agenda .zma-mini{display:flex;flex-wrap:wrap;gap:3px}
+#zm-agenda .zma-m{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 3px;border-radius:4px;font-size:10px;font-weight:700}
+#zm-agenda .zma-m.f{background:#0E8A6E;color:#fff}
+#zm-agenda .zma-m.o{background:#EEF0F2;color:#9AA0A9}
+#zm-agenda .zma-m.p{background:#F6D58E;color:#6B4100}
+#zm-agenda .zma-m.s{background:#1F3FBF;color:#fff}
+#zm-agenda .s-livre{background:#EAF6F2;border-color:#9FD3C1;color:#0B6B55;font-weight:700}
+#zm-agenda .s-multi{background:#fff;border-color:#BFE0D4;color:#0B6B55;font-weight:700}
+#zm-agenda .s-pre{background:repeating-linear-gradient(135deg,#FFE2A8 0 6px,#FFF3D9 6px 12px);border-color:#E9B44C;color:#6B4100;font-weight:600}
+#zm-agenda .s-reservado{background:#E1E4E8;border-color:#E1E4E8;color:#4F5560}
+#zm-agenda .s-bloqueado{background:repeating-linear-gradient(135deg,#E6E8EB 0 4px,#F6F7F8 4px 8px);border-color:#D9DCE0;color:#5B616B}
+#zm-agenda .s-passado{background:#F6F7F8;border-color:#F0F1F3;color:#B0B5BC}
+#zm-agenda .s-sel{background:#1F3FBF;border-color:#1F3FBF;color:#fff;font-weight:700}
+#zm-agenda .s-cel{background:#EEF2FF;border:2px solid #1F3FBF;color:#1F3FBF;font-weight:700}
+#zm-agenda .zma-days{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:16px}
+#zm-agenda .zma-days button{flex:0 0 auto;min-width:64px;min-height:62px;padding:6px 8px;border-radius:12px;border:1px solid #D5D9DF;background:#fff;color:#16181D;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+#zm-agenda .zma-days button small{font-size:12px;text-transform:capitalize}
+#zm-agenda .zma-days button b{font-size:18px}
+#zm-agenda .zma-days button[aria-pressed="true"]{background:#16181D;border-color:#16181D;color:#fff}
+#zm-agenda .zma-days button[disabled]{opacity:.35;cursor:default}
+#zm-agenda .zma-st{padding:12px 0;border-top:1px solid #EEF0F2}
+#zm-agenda .zma-st:first-of-type{border-top:0;padding-top:0}
+#zm-agenda .zma-sth{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}
+#zm-agenda .zma-sth b{font-size:16px}
+#zm-agenda .zma-sth small{font-size:12px;color:#5B616B;margin-left:6px;font-weight:400}
+#zm-agenda .zma-slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(76px,1fr));gap:6px}
+#zm-agenda .zma-slots .zma-c{height:52px;align-items:center;text-align:center}
+#zm-agenda .zma-slots .zma-c b{font-size:15px;font-variant-numeric:tabular-nums}
+#zm-agenda .zma-slots .zma-c span{font-size:11px}
+#zm-agenda .zma-bar{position:sticky;bottom:8px;z-index:20;background:#16181D;color:#fff;border-radius:16px;padding:14px 16px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 10px 28px rgba(0,0,0,.22)}
+#zm-agenda .zma-bar small{display:block;font-size:12px;color:#C9CDD3}
+#zm-agenda .zma-bar b{font-size:16px}
+#zm-agenda .zma-bar .zma-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#zm-agenda .zma-bar .zma-seg{background:#2A2E35}
+#zm-agenda .zma-bar .zma-seg button{color:#fff;min-height:36px;padding:0 12px}
+#zm-agenda .zma-bar .zma-seg button[aria-pressed="true"]{background:#fff;color:#16181D}
+#zm-agenda .zma-bar .zma-seg button[disabled]{opacity:.35;cursor:default}
+#zm-agenda .zma-wa{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border-radius:12px;background:#fff;color:#16181D !important;font-weight:700;font-size:15px;text-decoration:none !important}
+#zm-agenda .zma-x{min-height:44px;padding:0 10px;border:0;background:transparent;color:#C9CDD3;font-size:14px;font-weight:600}
+#zm-agenda .zma-pick{min-height:40px;padding:0 14px;border-radius:10px;border:0;background:#0E8A6E;color:#fff;font-weight:700;font-size:14px}
+#zm-agenda .zma-msg{padding:28px 16px;text-align:center;color:#4A5059}
+#zm-agenda .zma-msg a{color:#1F3FBF;font-weight:600}
+#zm-agenda .zma-foot{font-size:12px;color:#5B616B;margin-top:8px}
+@media (max-width:600px){#zm-agenda .zma-h1{font-size:23px}#zm-agenda .zma-card{padding:12px;border-radius:14px}#zm-agenda .zma-navlbl{min-width:0;font-size:14px}#zm-agenda .zma-seg button{padding:0 12px}}
+</style>
+</head>
+<body>
+<div id="zm-agenda"><div class="zma-app"><div class="zma-msg">Carregando a agenda…</div></div></div>
+<script>
+(function () {
+  var API = '/disponibilidade';
+  var WA = '5511995540293';
+  var root = document.getElementById('zm-agenda');
+  if (!root) return;
+  var app = root.querySelector('.zma-app');
+  var UN = {
+    aclimacao: { nome: 'Aclimação', end: 'Rua Gualaxo, 206', est: [['A', ''], ['B', ''], ['C', ''], ['D', ''], ['AB', 'A + B juntos']] },
+    belavista: { nome: 'Bela Vista', end: 'Rua Santa Madalena, 46', est: [['1', ''], ['2', ''], ['3', '']] }
+  };
+  var HRS = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+  var DOW = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  var DOWL = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+  var MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fromKey(k) { var p = k.split('-'); return new Date(+p[0], +p[1] - 1, +p[2], 12); }
+  function keyOf(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function addDays(k, n) { var d = fromKey(k); d.setDate(d.getDate() + n); return keyOf(d); }
+  function mondayOf(k) { var d = fromKey(k); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return keyOf(d); }
+  function hm(h) { return pad(h) + ':00'; }
+  function dShort(k) { var d = fromKey(k); return DOW[d.getDay()] + ', ' + d.getDate() + '/' + pad(d.getMonth() + 1); }
+  function dLong(k) { var d = fromKey(k); return DOWL[d.getDay()] + ', ' + d.getDate() + ' de ' + MES[d.getMonth()]; }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function startOf(k, h) { return new Date(k + 'T' + pad(h) + ':00:00-03:00').getTime(); }
+  function hoje() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); }
+  var HOJE = hoje();
+  var SEM0 = mondayOf(HOJE);
+  var SEMMAX = addDays(SEM0, 7 * 8);
+  var st = { unit: 'aclimacao', est: 'all', view: (window.innerWidth < 720 ? 'dia' : 'semana'), week: SEM0, day: HOJE, sel: null, data: {}, erro: false };
+  function load(ws, force) {
+    if (st.data[ws] && !force) return;
+    if (!force) st.data[ws] = 'loading';
+    fetch(API + '?inicio=' + ws + '&dias=7')
+      .then(function (r) { if (!r.ok) throw new Error('http'); return r.json(); })
+      .then(function (d) { st.data[ws] = d.ocupado; st.erro = false; render(); })
+      .catch(function () { if (!force) { delete st.data[ws]; st.erro = true; } render(); });
+  }
+  function dataFor(k) { var d = st.data[mondayOf(k)]; return (d && d !== 'loading') ? d : null; }
+  function status(u, e, k, h) {
+    var s = st.sel;
+    if (s && s.e === e && s.u === u && s.k === k && h >= s.h && h < s.h + s.dur) return 'sel';
+    var ini = startOf(k, h), fim = ini + 3600000;
+    if (ini <= Date.now()) return 'passado';
+    var d = dataFor(k); if (!d) return 'passado';
+    var list = (d[u] || {})[e] || [], res = null;
+    for (var i = 0; i < list.length; i++) {
+      var a = Date.parse(list[i].ini), b = Date.parse(list[i].fim);
+      if (a < fim && b > ini) {
+        if (list[i].status === 'reservado') return 'reservado';
+        if (list[i].status === 'bloqueado') res = 'bloqueado';
+        else if (!res) res = 'pre';
+      }
+    }
+    return res || 'livre';
+  }
+  function livre(u, e, k, h) {
+    var sv = st.sel; st.sel = null; var r = status(u, e, k, h); st.sel = sv; return r === 'livre';
+  }
+  function maxDur(s) { var n = 0; for (var h = s.h; h <= 20 && n < 4; h++) { if (livre(s.u, s.e, s.k, h)) n++; else break; } return Math.max(1, n); }
+  var LBL = { livre: 'Livre', pre: 'Pré-reserva', reservado: 'Reservado', bloqueado: 'Fechado', sel: 'Selecionado', passado: '' };
+  function unitsShown() { return st.unit === 'todos' ? ['aclimacao', 'belavista'] : [st.unit]; }
+  function estsOf(u) { var f = st.unit === 'todos' ? 'all' : st.est; return UN[u].est.filter(function (x) { return f === 'all' || x[0] === f; }); }
+  function controls() {
+    var h = '<div class="zma-card"><div class="zma-row"><div class="zma-seg" role="group" aria-label="Unidade">';
+    [['aclimacao', 'Aclimação'], ['belavista', 'Bela Vista'], ['todos', 'Todos']].forEach(function (t) {
+      h += '<button type="button" data-act="unit" data-v="' + t[0] + '" aria-pressed="' + (st.unit === t[0]) + '">' + t[1] + '</button>';
+    });
+    h += '</div><div class="zma-row" style="justify-content:flex-end"><div class="zma-seg zma-light" role="group" aria-label="Visualização">';
+    [['dia', 'Dia'], ['semana', 'Semana']].forEach(function (t) {
+      h += '<button type="button" data-act="view" data-v="' + t[0] + '" aria-pressed="' + (st.view === t[0]) + '">' + t[1] + '</button>';
+    });
+    var ate = addDays(st.week, 6), a = fromKey(st.week), b = fromKey(ate);
+    var lbl = a.getMonth() === b.getMonth() ? a.getDate() + ' – ' + b.getDate() + ' ' + MES[b.getMonth()] : a.getDate() + ' ' + MES[a.getMonth()] + ' – ' + b.getDate() + ' ' + MES[b.getMonth()];
+    h += '</div><div class="zma-nav"><button type="button" data-act="prev" aria-label="Semana anterior"' + (st.week <= SEM0 ? ' disabled' : '') + '>‹</button><span class="zma-navlbl">' + lbl + '</span><button type="button" data-act="next" aria-label="Próxima semana"' + (st.week >= SEMMAX ? ' disabled' : '') + '>›</button><button type="button" data-act="hoje">Hoje</button></div></div></div>';
+    if (st.unit !== 'todos') {
+      h += '<div class="zma-chips" role="group" aria-label="Estúdio"><span class="zma-lbl">Estúdio</span>';
+      [['all', 'Todos os estúdios']].concat(UN[st.unit].est.map(function (x) { return [x[0], 'Estúdio ' + x[0] + (x[1] ? ' (' + x[1] + ')' : '')]; })).forEach(function (c) {
+        h += '<button type="button" class="zma-chip" data-act="est" data-v="' + c[0] + '" aria-pressed="' + (st.est === c[0]) + '">' + c[1] + '</button>';
+      });
+      h += '</div>';
+    }
+    h += '<div class="zma-legend"><span><i class="zma-sw s-livre"></i>Livre</span><span><i class="zma-sw s-pre"></i>Pré-reserva</span><span><i class="zma-sw s-reservado"></i>Reservado</span><span><i class="zma-sw s-bloqueado"></i>Fechado</span><span><i class="zma-sw s-sel"></i>Selecionado</span></div></div>';
+    return h;
+  }
+  function weekBlock(u) {
+    var days = [], i, all = st.unit === 'todos' || st.est === 'all', ests = estsOf(u), free = 0;
+    for (i = 0; i < 7; i++) days.push(addDays(st.week, i));
+    var g = '<div class="zma-grid"><div></div>';
+    days.forEach(function (k) { var d = fromKey(k); g += '<div class="zma-dh"><small>' + DOW[d.getDay()] + '</small><b>' + d.getDate() + (k === HOJE ? ' <span class="zma-today">Hoje</span>' : '') + '</b></div>'; });
+    HRS.forEach(function (h) {
+      g += '<div class="zma-t">' + hm(h) + '</div>';
+      days.forEach(function (k) {
+        if (all) {
+          var n = 0, past = true, mini = '', mine = st.sel && st.sel.u === u && st.sel.k === k && h >= st.sel.h && h < st.sel.h + (st.sel.e ? st.sel.dur : 1);
+          ests.forEach(function (x) {
+            var s = status(u, x[0], k, h);
+            if (s !== 'passado') past = false;
+            if (s === 'livre') n++;
+            mini += '<span class="zma-m ' + (s === 'livre' ? 'f' : s === 'sel' ? 's' : s === 'pre' ? 'p' : 'o') + '">' + x[0] + '</span>';
+          });
+          free += n;
+          if (past) g += '<div class="zma-c s-passado"></div>';
+          else if (n === 0 && !mine) g += '<div class="zma-c s-reservado"><span style="font-size:11px;font-weight:700">Lotado</span><span class="zma-mini">' + mini + '</span></div>';
+          else g += '<button type="button" class="zma-c ' + (mine ? 's-cel' : 's-multi') + '" data-act="pickall" data-u="' + u + '" data-k="' + k + '" data-h="' + h + '" aria-label="' + n + ' estúdios livres, ' + dShort(k) + ' às ' + hm(h) + '"><span style="font-size:11px">' + (n === 1 ? '1 livre' : n + ' livres') + '</span><span class="zma-mini">' + mini + '</span></button>';
+        } else {
+          var e = ests[0][0], s = status(u, e, k, h), prev = h > 9 ? status(u, e, k, h - 1) : null;
+          if (s === 'livre') free++;
+          var lb = (s === 'livre' || s === 'sel' || s !== prev) ? LBL[s] : '';
+          if (s === 'livre') g += '<button type="button" class="zma-c s-livre" data-act="pick" data-u="' + u + '" data-e="' + e + '" data-k="' + k + '" data-h="' + h + '" aria-label="Livre, Estúdio ' + e + ', ' + dShort(k) + ' às ' + hm(h) + '">' + lb + '</button>';
+          else g += '<div class="zma-c s-' + s + '">' + lb + '</div>';
+        }
+      });
+    });
+    g += '</div>';
+    var sub = UN[u].end + ' · ' + (all ? 'cada quadro mostra quais estúdios estão livres' : 'Estúdio ' + ests[0][0]);
+    return '<div class="zma-card"><div class="zma-bhead"><div><div class="zma-bt">' + UN[u].nome + '</div><div class="zma-bs">' + sub + '</div></div><div class="zma-free">' + free + ' horários livres nesta semana</div></div><div class="zma-scroll">' + g + '</div></div>';
+  }
+  function dayStrip() {
+    var h = '<div class="zma-days" role="group" aria-label="Dia">';
+    for (var i = 0; i < 7; i++) {
+      var k = addDays(st.week, i), d = fromKey(k);
+      h += '<button type="button" data-act="day" data-v="' + k + '" aria-pressed="' + (k === st.day) + '"' + (k < HOJE ? ' disabled' : '') + '><small>' + DOW[d.getDay()] + '</small><b>' + d.getDate() + '</b></button>';
+    }
+    return h + '</div>';
+  }
+  function dayBlock(u) {
+    var k = st.day, free = 0, rows = '';
+    estsOf(u).forEach(function (x) {
+      var n = 0, sl = '';
+      HRS.forEach(function (h) {
+        var s = status(u, x[0], k, h);
+        if (s === 'livre') { n++; sl += '<button type="button" class="zma-c s-livre" data-act="pick" data-u="' + u + '" data-e="' + x[0] + '" data-k="' + k + '" data-h="' + h + '" aria-label="Livre, Estúdio ' + x[0] + ' às ' + hm(h) + '"><b>' + hm(h) + '</b><span>Livre</span></button>'; }
+        else sl += '<div class="zma-c s-' + s + '"><b>' + hm(h) + '</b><span>' + LBL[s] + '</span></div>';
+      });
+      free += n;
+      rows += '<div class="zma-st"><div class="zma-sth"><b>Estúdio ' + x[0] + (x[1] ? '<small>' + x[1] + '</small>' : '') + '</b><span class="zma-free">' + (n === 0 ? '<span style="color:#4F5560">Lotado</span>' : n + (n === 1 ? ' horário livre' : ' horários livres')) + '</span></div><div class="zma-slots">' + sl + '</div></div>';
+    });
+    return '<div class="zma-card"><div class="zma-bhead"><div><div class="zma-bt">' + UN[u].nome + '</div><div class="zma-bs">' + UN[u].end + ' · ' + cap(dLong(k)) + '</div></div><div class="zma-free">' + free + ' horários livres neste dia</div></div>' + rows + '</div>';
+  }
+  function bar() {
+    var s = st.sel; if (!s) return '';
+    if (!s.e) {
+      var b = '';
+      UN[s.u].est.forEach(function (x) { if (livre(s.u, x[0], s.k, s.h)) b += '<button type="button" class="zma-pick" data-act="choose" data-v="' + x[0] + '">Estúdio ' + x[0] + '</button>'; });
+      return '<div class="zma-bar"><div><small>' + UN[s.u].nome + ' · ' + cap(dLong(s.k)) + ' · ' + hm(s.h) + '</small><b>Qual estúdio? Estes estão livres:</b></div><div class="zma-acts">' + b + '<button type="button" class="zma-x" data-act="clear">Cancelar</button></div></div>';
+    }
+    var max = maxDur(s); if (s.dur > max) s.dur = max;
+    var durs = '';
+    for (var n = 1; n <= 4; n++) durs += '<button type="button" data-act="dur" data-v="' + n + '" aria-pressed="' + (s.dur === n) + '"' + (n > max ? ' disabled' : '') + '>' + n + 'h</button>';
+    var quando = cap(dLong(s.k)) + ', das ' + hm(s.h) + ' às ' + hm(s.h + s.dur);
+    var msg = 'Olá! Vi na agenda do site e gostaria de reservar o Estúdio ' + s.e + ' (' + UN[s.u].nome + ') na ' + dLong(s.k) + ', das ' + hm(s.h) + ' às ' + hm(s.h + s.dur) + '. Está disponível?';
+    return '<div class="zma-bar"><div><small>Estúdio ' + s.e + ' · ' + UN[s.u].nome + '</small><b>' + quando + '</b></div><div class="zma-acts"><div class="zma-seg" role="group" aria-label="Duração">' + durs + '</div><a class="zma-wa" target="_blank" rel="noopener" href="https://wa.me/' + WA + '?text=' + encodeURIComponent(msg) + '">Reservar pelo WhatsApp</a><button type="button" class="zma-x" data-act="clear">Limpar</button></div></div>';
+  }
+  function render() {
+    var h = '<div class="zma-top"><div class="zma-h1">Agenda de horários</div><div class="zma-sub">Escolha a unidade e o estúdio, toque em um horário livre e reserve pelo WhatsApp.</div></div>' + controls();
+    var d = st.data[st.week];
+    if (st.erro && (!d || d === 'loading')) h += '<div class="zma-card zma-msg">Não conseguimos carregar a agenda agora. <a href="https://wa.me/' + WA + '" target="_blank" rel="noopener">Fale com a gente pelo WhatsApp</a>.</div>';
+    else if (!d || d === 'loading') h += '<div class="zma-card zma-msg">Carregando a agenda…</div>';
+    else {
+      if (st.view === 'dia') h += dayStrip();
+      unitsShown().forEach(function (u) { h += st.view === 'dia' ? dayBlock(u) : weekBlock(u); });
+      h += bar();
+    }
+    h += '<p class="zma-foot">Horários de 9h às 21h, atualizados automaticamente. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
+    var sx = app.querySelector('.zma-scroll'), left = sx ? sx.scrollLeft : 0;
+    app.innerHTML = h;
+    var nx = app.querySelector('.zma-scroll'); if (nx) nx.scrollLeft = left;
+  }
+  function goWeek(w) {
+    st.week = w; st.sel = null;
+    st.day = w < HOJE ? HOJE : w;
+    if (mondayOf(st.day) !== w) st.day = w;
+    load(w); render();
+  }
+  root.addEventListener('click', function (ev) {
+    var t = ev.target.closest ? ev.target.closest('[data-act]') : null;
+    if (!t || !root.contains(t) || t.disabled) return;
+    var a = t.getAttribute('data-act'), v = t.getAttribute('data-v');
+    if (a === 'unit') { st.unit = v; st.est = 'all'; st.sel = null; }
+    else if (a === 'est') { st.est = v; st.sel = null; }
+    else if (a === 'view') { st.view = v; }
+    else if (a === 'prev') { goWeek(addDays(st.week, -7)); return; }
+    else if (a === 'next') { goWeek(addDays(st.week, 7)); return; }
+    else if (a === 'hoje') { goWeek(SEM0); st.day = HOJE; render(); return; }
+    else if (a === 'day') { st.day = v; st.sel = null; }
+    else if (a === 'pick') { st.sel = { u: t.getAttribute('data-u'), e: t.getAttribute('data-e'), k: t.getAttribute('data-k'), h: +t.getAttribute('data-h'), dur: 1 }; }
+    else if (a === 'pickall') { st.sel = { u: t.getAttribute('data-u'), e: null, k: t.getAttribute('data-k'), h: +t.getAttribute('data-h'), dur: 1 }; }
+    else if (a === 'choose') { st.sel.e = v; st.sel.dur = 1; }
+    else if (a === 'dur') { st.sel.dur = +v; }
+    else if (a === 'clear') { st.sel = null; }
+    else return;
+    render();
+  });
+  load(SEM0);
+  render();
+  setInterval(function () { if (!document.hidden) load(st.week, true); }, 3 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
