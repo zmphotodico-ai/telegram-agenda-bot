@@ -2407,7 +2407,7 @@ async function siteMontarDisponibilidade(inicioISO, dias) {
 
 app.get("/disponibilidade", async (req, res) => {
   const origem = req.get("origin");
-  if (SITE_ORIGENS.includes(origem)) res.set("Access-Control-Allow-Origin", origem);
+    res.set("Access-Control-Allow-Origin", "*");
   res.set("Vary", "Origin");
   try {
     const inicioISO = /^\d{4}-\d{2}-\d{2}$/.test(req.query.inicio || "")
