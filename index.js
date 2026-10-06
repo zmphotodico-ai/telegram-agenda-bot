@@ -2305,6 +2305,11 @@ app.post("/webhook", async (req, res) => {
         await resetarAvisosClientesReais(chatId, confirmar);
         return;
       }
+      if (textoMensagem === '!conferir') {
+        await sendMessage(chatId, '🔎 Conferindo a agenda dos próximos 60 dias, um instante...');
+        await rodarConferencia(chatId, true);
+        return;
+      }
       if (textoMensagem === '!ajuda') {
         await sendMessage(chatId,
           "🤖 *Comandos disponíveis:*\n\n" +
@@ -2319,6 +2324,7 @@ app.post("/webhook", async (req, res) => {
           "!confirmarpagamento [telefone] [valor] — marca reservas como pagas (para de cobrar)\n" +
           "!resetaravisos — mostra quantas reservas seriam resetadas (!resetaravisos confirmar executa)\n" +
           "!agenda [estúdio/unidade] [semana/data] — mostra a agenda (ex.: !agenda A semana)\n" +
+          "!conferir — confere a agenda (estúdio errado, sem estúdio ou horário em conflito); só avisa, não muda nada\n" +
           "!vagos [estúdio/unidade] [semana/data] — mostra só os horários livres (ex.: !vagos bela vista hoje)\n" +
           "!status — diz se o respondedor está ligado\n" +
           "!ativar / !desativar — liga/desliga o respondedor\n" +
@@ -2347,12 +2353,10 @@ app.post("/webhook", async (req, res) => {
 // Devolve, para cada estúdio, os intervalos ocupados. NUNCA devolve
 // nome, telefone ou descrição do cliente. Não cria, não altera e não
 // cancela nada no Google Agenda.
-// Uso: GET /disponibilidade?inicio=2026-10-12&dias=7
+// Uso: GET /disponibilidade?inicio=2026-10-12&dias=61
+// Cada ocupação: { ini, fim, status, est } — "est" é o estúdio do evento
+// (A, B, C, D, AB, 1, 2, 3 ou null), usado só para pintar a cor do estúdio.
 // =====================================================================
-const SITE_ORIGENS = [
-  "https://alugueldeestudiofotografico.com",
-  "https://www.alugueldeestudiofotografico.com",
-];
 const SITE_ESTUDIOS = { aclimacao: ["A", "B", "C", "D", "AB"], belavista: ["1", "2", "3"] };
 const siteCache = new Map();
 
@@ -2363,8 +2367,16 @@ function siteStatusDoEvento(ev) {
   return "reservado";
 }
 
+// Estúdio do evento, só se ele pertencer a esta unidade. Se o título tiver um
+// estúdio de outra unidade (ex.: "B" na agenda da Bela Vista) ou não tiver
+// estúdio, devolve null — e aí a unidade inteira fica ocupada (por segurança).
+function siteEstudioDaUnidade(ev, unidade) {
+  const est = extrairEstudio(ev);
+  return est && SITE_ESTUDIOS[unidade].includes(est) ? est : null;
+}
+
 function siteEstudiosAfetados(est, unidade) {
-  if (!est) return SITE_ESTUDIOS[unidade].slice(); // sem estúdio no título: bloqueia a unidade toda (por segurança)
+  if (!est) return SITE_ESTUDIOS[unidade].slice();
   if (est === "A") return ["A", "AB"];
   if (est === "B") return ["B", "AB"];
   if (est === "AB") return ["A", "B", "AB"];
@@ -2394,9 +2406,10 @@ async function siteMontarDisponibilidade(inicioISO, dias) {
       for (const ev of (res.data.items || [])) {
         if (ev.status === "cancelled" || ev.transparency === "transparent") continue;
         if (!ev.start || !ev.start.dateTime) continue; // eventos de dia inteiro são anotações, não reservas
-        const ocupado = { ini: ev.start.dateTime, fim: ev.end.dateTime, status: siteStatusDoEvento(ev) };
-        for (const est of siteEstudiosAfetados(extrairEstudio(ev), unidade)) {
-          if (saida[unidade][est]) saida[unidade][est].push(ocupado);
+        const est = siteEstudioDaUnidade(ev, unidade);
+        const ocupado = { ini: ev.start.dateTime, fim: ev.end.dateTime, status: siteStatusDoEvento(ev), est };
+        for (const e of siteEstudiosAfetados(est, unidade)) {
+          if (saida[unidade][e]) saida[unidade][e].push(ocupado);
         }
       }
       pageToken = res.data.nextPageToken;
@@ -2406,14 +2419,12 @@ async function siteMontarDisponibilidade(inicioISO, dias) {
 }
 
 app.get("/disponibilidade", async (req, res) => {
-  const origem = req.get("origin");
-    res.set("Access-Control-Allow-Origin", "*");
-  res.set("Vary", "Origin");
+  res.set("Access-Control-Allow-Origin", "*");
   try {
     const inicioISO = /^\d{4}-\d{2}-\d{2}$/.test(req.query.inicio || "")
       ? req.query.inicio
       : new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 42);
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 62);
     const chave = `${inicioISO}|${dias}`;
     const emCache = siteCache.get(chave);
     if (emCache && Date.now() - emCache.em < 2 * 60 * 1000) return res.json(emCache.dados);
@@ -2434,6 +2445,103 @@ app.get("/disponibilidade", async (req, res) => {
   }
 });
 // ===================== fim do bloco da agenda do site =====================
+
+// =====================================================================
+// CONFERÊNCIA DA AGENDA — SÓ AVISA A EQUIPE NO TELEGRAM
+// Procura, nos próximos 60 dias das agendas Aclimação e Bela Vista:
+//   • evento sem estúdio no título (que não seja bloqueio/fechamento);
+//   • estúdio que não é daquela unidade (ex.: "B" na agenda da Bela Vista);
+//   • dois agendamentos no mesmo estúdio e horário (AB conta com A e com B).
+// Nunca altera, move ou cancela eventos. Nunca manda mensagem a clientes.
+// Roda sozinha todo dia às 8h05 (horário de São Paulo) e pelo comando !conferir.
+// =====================================================================
+const CONF_UNIDADES = [["aclimacao", "Aclimação", 0], ["belavista", "Bela Vista", 1]];
+
+function confQuando(t) {
+  return new Date(t).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo", weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function conferirAgenda(dias = 60) {
+  const inicio = new Date();
+  const fim = new Date(inicio.getTime() + dias * 24 * 60 * 60 * 1000);
+  const problemas = [];
+  for (const [unidade, nomeUn, idx] of CONF_UNIDADES) {
+    const calId = CALENDAR_IDS[idx];
+    if (!calId) continue;
+    const eventos = [];
+    let pageToken;
+    do {
+      const res = await calendar.events.list({
+        calendarId: calId, timeMin: inicio.toISOString(), timeMax: fim.toISOString(),
+        singleEvents: true, orderBy: "startTime", maxResults: 2500, pageToken,
+      });
+      for (const ev of (res.data.items || [])) {
+        if (ev.status === "cancelled" || ev.transparency === "transparent") continue;
+        if (!ev.start || !ev.start.dateTime) continue;
+        eventos.push(ev);
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+
+    const comEstudio = [];
+    for (const ev of eventos) {
+      const titulo = (ev.summary || "(sem título)").trim();
+      const quando = confQuando(ev.start.dateTime);
+      const est = extrairEstudio(ev);
+      const bloqueio = /BLOQ|FECHAD|MANUTEN/i.test(titulo);
+      if (!est) {
+        if (!bloqueio) problemas.push(`❓ ${nomeUn} · ${quando} · "${titulo}"\n   sem estúdio no título (no site, a unidade inteira aparece ocupada)`);
+        continue;
+      }
+      if (!SITE_ESTUDIOS[unidade].includes(est)) {
+        problemas.push(`⚠️ ${nomeUn} · ${quando} · "${titulo}"\n   o estúdio ${est} não é desta unidade — está na agenda errada ou com o número errado?`);
+        continue;
+      }
+      comEstudio.push({ titulo, est, ini: Date.parse(ev.start.dateTime), fim: Date.parse(ev.end.dateTime) });
+    }
+    for (let i = 0; i < comEstudio.length; i++) {
+      for (let j = i + 1; j < comEstudio.length; j++) {
+        const a = comEstudio[i], b = comEstudio[j];
+        if (!(a.ini < b.fim && b.ini < a.fim)) continue;
+        if (!siteEstudiosAfetados(a.est, unidade).includes(b.est)) continue;
+        problemas.push(`🔴 ${nomeUn} · conflito no mesmo horário:\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
+      }
+    }
+  }
+  return problemas;
+}
+
+function confMontarMensagens(problemas) {
+  if (!problemas.length) return ["✅ Conferência da agenda: nenhum problema nos próximos 60 dias."];
+  const cab = `🔎 Conferência da agenda — ${problemas.length} ${problemas.length === 1 ? "ponto" : "pontos"} para revisar (próximos 60 dias).\nNada foi alterado; só estou avisando.\n\n`;
+  const msgs = [];
+  let atual = cab;
+  for (const p of problemas) {
+    if ((atual + p + "\n\n").length > 3800) { msgs.push(atual); atual = ""; }
+    atual += p + "\n\n";
+  }
+  if (atual.trim()) msgs.push(atual);
+  return msgs;
+}
+
+async function rodarConferencia(destino = CHAT_MATINAL, sempre = true) {
+  const problemas = await conferirAgenda(60);
+  if (!problemas.length && !sempre) return;
+  for (const m of confMontarMensagens(problemas)) await sendMessage(destino, m, true);
+}
+
+// 8h05 — conferência automática (só manda mensagem se achar algum problema)
+cron.schedule('5 8 * * *', async () => {
+  console.log("⏰ Rodando a conferência da agenda das 8h05...");
+  try {
+    await rodarConferencia(CHAT_MATINAL, false);
+  } catch (e) {
+    console.error("Erro na conferência da agenda:", e.message);
+  }
+}, { timezone: "America/Sao_Paulo" });
+// ===================== fim da conferência da agenda =====================
 
 // ===================== página da agenda do site (para o iframe) =====================
 import { readFileSync } from "fs";
