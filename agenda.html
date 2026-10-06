@@ -16,7 +16,6 @@
 }
 html,body{background:var(--bg)}
 html,body{margin:0}
-html,body{max-width:100%;overflow-x:hidden}
 body{color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.35;padding-inline:16px;padding-block:16px 28px}
 *{box-sizing:border-box}
 button{font:inherit;cursor:pointer;color:inherit}
@@ -135,7 +134,27 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
 .ml i{position:absolute;left:0;right:0}
 .mini .sep{flex:0 0 3px}
 @media (max-width:600px){.mo{gap:3px;padding:6px}.md{min-height:80px;padding:4px;border-radius:8px}.md .pill{display:none}.mini{gap:1px;height:40px}.mini .sep{flex-basis:2px}.md .n small{display:none}}
-@media (max-width:600px){.top h1{font-size:23px}.bar strong{font-size:15px}.bar .hint{font-size:14px}.bk b,.sl b+span{display:none!important}.bk{padding:4px;font-size:10.5px}.calh span{display:block}.wk{min-width:calc(40px + 7 * 150px)}}
+html,body{max-width:100%;overflow-x:hidden}
+.wm{display:flex;flex-direction:column;gap:12px;padding:12px}
+.wm-day{border:1px solid var(--line);border-radius:12px;padding:12px 12px 8px}
+.wm-dh{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px;margin-bottom:6px}
+.wm-dh button{border:0;background:none;padding:0;text-align:left;font-size:17px;font-weight:700;text-transform:none}
+.wm-dh button i{font-style:normal;font-size:11px;font-weight:700;color:var(--sel);margin-left:6px}
+.wm-dh .pill{font-size:11px}
+.wm-scale{position:relative;height:16px;margin-left:46px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.wm-scale span{position:absolute;top:0;transform:translateX(-50%)}
+.wm-scale span:first-child{transform:none}.wm-scale span:last-child{transform:translateX(-100%)}
+.wm-un{font-size:11.5px;font-weight:600;color:var(--muted);margin:8px 0 2px;text-transform:uppercase;letter-spacing:.04em}
+.wm-row{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;padding:3px 0;min-height:34px;cursor:pointer}
+.wm-lbl{flex:0 0 38px;font-weight:700;font-size:14px;text-align:left;border-left:4px solid;padding-left:6px;line-height:1.1}
+.wm-bar{position:relative;flex:1;height:24px;border-radius:6px;overflow:hidden;background-color:#fff;box-shadow:inset 0 0 0 1px #DADDE2;
+  background-image:linear-gradient(90deg,#EEF0F2 1px,transparent 1px);background-size:calc(100% / 12) 100%}
+.wm-bar i{position:absolute;top:0;bottom:0}
+.wm-bar i.fe{background:repeating-linear-gradient(135deg,#E2E5E9 0 3px,#F4F5F7 3px 6px)}
+.wm-bar .past{position:absolute;left:0;top:0;bottom:0;background:rgba(246,247,248,.82);z-index:1}
+.wm-row:active .wm-bar{box-shadow:inset 0 0 0 2px var(--free)}
+@media (max-width:640px){.seg button{min-height:44px;font-size:15px;padding:0 18px}.nav button{width:44px;height:44px;font-size:18px}.legend{font-size:13px}.days button{width:66px;min-height:70px}}
+@media (max-width:600px){.top h1{font-size:23px}.bar strong{font-size:15px}.bar .hint{font-size:14px}.bk b,.sl b+span{display:none!important}.bk{padding:4px;font-size:10.5px}.calh span{display:block}}
 @media (prefers-reduced-motion:no-preference){.sl{transition:top .12s,height .12s}}
 </style>
 </head>
@@ -241,7 +260,35 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
       for (var hh = HI; hh < HF; hh++) { tot++; for (var i = 0; i < B.length; i++) if (B[i].a < hh * 60 + 60 && B[i].b > hh * 60) { occ++; break; } } });
     return occ / tot;
   }
+  function celular() { return window.innerWidth < 640; }
+  function semanaCelular() {
+    var d0 = addDays(HOJE, st.wk * 7), d6 = addDays(d0, 6), a = fromKey(d0), z = fromKey(d6), ms = agoraMin(), span = (HF - HI) * 60;
+    var h = '<div class="cal"><div class="calh"><div><b>' + a.getDate() + (a.getMonth() !== z.getMonth() ? ' ' + MES[a.getMonth()] : '') + ' – ' + z.getDate() + ' ' + MES[z.getMonth()] + '</b> <span>· todos os estúdios</span></div>';
+    h += '<div class="nav"><button type="button" data-act="wk" data-v="-1" aria-label="Semana anterior"' + (st.wk === 0 ? ' disabled' : '') + '>‹</button><button type="button" data-act="wk" data-v="1" aria-label="Próxima semana"' + (st.wk >= 8 ? ' disabled' : '') + '>›</button></div></div><div class="wm">';
+    for (var i = 0; i < 7; i++) {
+      var k = addDays(d0, i), oc = ocupacao(k), mst = minStart(k), past = Math.max(0, Math.min(100, (mst - HI * 60) / span * 100));
+      var pill = oc >= 0.8 ? '<span class="pill q">Quase lotado</span>' : oc >= 0.5 ? '<span class="pill m">Muito procurado</span>' : '';
+      h += '<section class="wm-day"><div class="wm-dh"><button type="button" data-act="openday" data-v="' + k + '">' + cap(dLong(k)) + (k === HOJE ? '<i>HOJE</i>' : '') + '</button>' + pill + '</div>';
+      h += '<div class="wm-scale"><span style="left:0">9h</span><span style="left:25%">12h</span><span style="left:50%">15h</span><span style="left:75%">18h</span><span style="left:100%">21h</span></div>';
+      var un = null;
+      LANES.forEach(function (L) {
+        if (!L) return;
+        if (L[0] !== un) { un = L[0]; h += '<div class="wm-un">' + UN[un].nome + '</div>'; }
+        h += '<button type="button" class="wm-row" data-k="' + k + '" data-u="' + L[0] + '" data-e="' + L[1] + '" aria-label="Estúdio ' + L[1] + ', ' + dLong(k) + '"><span class="wm-lbl" style="border-color:' + COR[L[1]] + '">' + L[1] + '</span><span class="wm-bar">';
+        if (past > 0) h += '<span class="past" style="width:' + past + '%"></span>';
+        busy(k, L[0], L[1]).forEach(function (b) {
+          var x = Math.max(b.a, HI * 60), y = Math.min(b.b, HF * 60); if (y <= x) return;
+          h += '<i' + (b.s === 'bloqueado' ? ' class="fe"' : ' style="background:' + corDe(b.o) + ';') + (b.s === 'bloqueado' ? ' style="' : '') + 'left:' + ((x - HI * 60) / span * 100) + '%;width:' + ((y - x) / span * 100) + '%"></i>';
+        });
+        h += '</span></button>';
+      });
+      h += '</section>';
+    }
+    h += '</div></div>';
+    return h;
+  }
   function semana() {
+    if (celular()) return semanaCelular();
     var HW = 34, d0 = addDays(HOJE, st.wk * 7), d6 = addDays(d0, 6), a = fromKey(d0), z = fromKey(d6);
     var h = '<div class="cal"><div class="calh"><div><b>' + a.getDate() + (a.getMonth() !== z.getMonth() ? ' ' + MES[a.getMonth()] : '') + ' – ' + z.getDate() + ' ' + MES[z.getMonth()] + '</b> <span>· todos os estúdios das duas unidades</span></div>';
     h += '<div class="nav"><button type="button" data-act="wk" data-v="-1" aria-label="Semana anterior"' + (st.wk === 0 ? ' disabled' : '') + '>‹</button><button type="button" data-act="wk" data-v="1" aria-label="Próxima semana"' + (st.wk >= 8 ? ' disabled' : '') + '>›</button></div></div>';
@@ -413,6 +460,18 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
       render();
       return;
     }
+    var wr = ev.target.closest('.wm-row');
+    if (wr) {
+      var br = wr.querySelector('.wm-bar').getBoundingClientRect();
+      var mx = HI * 60 + Math.floor(Math.max(0, ev.clientX - br.left) / br.width * (HF - HI) * 2) * 30;
+      mx = Math.max(HI * 60, Math.min(HF * 60 - 60, mx));
+      st.view = 'dia'; st.day = wr.getAttribute('data-k'); st.unit = wr.getAttribute('data-u');
+      var e3 = wr.getAttribute('data-e'), ok3 = durs(st.day, st.unit, e3, mx);
+      st.sel = ok3.length ? { k: st.day, u: st.unit, e: e3, a: mx, d: ok3.indexOf(st.dur) >= 0 ? st.dur : ok3[0] } : null;
+      render(); window.scrollTo({ top: 0 });
+      if (!ok3.length) toast('Esse horário do Estúdio ' + e3 + ' está ocupado. Veja os espaços brancos.');
+      return;
+    }
     var ln = ev.target.closest('.ln');
     if (ln) {
       var r = ln.getBoundingClientRect(), mm = HI * 60 + Math.floor((ev.clientY - r.top) / 34 * 2) * 30;
@@ -453,6 +512,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
   });
   app.addEventListener('mouseleave', function () { if (ghost) { ghost.remove(); ghost = null; } });
 
+  var eraCel = celular();
+  window.addEventListener('resize', function () { if (celular() !== eraCel) { eraCel = celular(); if (CARREGADO) render(); } });
   render();
   carregar();
   setInterval(function () { if (!document.hidden) carregar(); }, 3 * 60 * 1000);
