@@ -2342,6 +2342,99 @@ app.post("/webhook", async (req, res) => {
   } catch (e) { console.error(e); }
 });
 
+// =====================================================================
+// AGENDA DO SITE — disponibilidade pública (SÓ LEITURA)
+// Devolve, para cada estúdio, os intervalos ocupados. NUNCA devolve
+// nome, telefone ou descrição do cliente. Não cria, não altera e não
+// cancela nada no Google Agenda.
+// Uso: GET /disponibilidade?inicio=2026-10-12&dias=7
+// =====================================================================
+const SITE_ORIGENS = [
+  "https://alugueldeestudiofotografico.com",
+  "https://www.alugueldeestudiofotografico.com",
+];
+const SITE_ESTUDIOS = { aclimacao: ["A", "B", "C", "D", "AB"], belavista: ["1", "2", "3"] };
+const siteCache = new Map();
+
+function siteStatusDoEvento(ev) {
+  const t = (ev.summary || "").toUpperCase();
+  if (/BLOQ|FECHAD|MANUTEN/.test(t)) return "bloqueado";
+  if (/(^|[^A-ZÀ-Ú])PR[EÉ]([^A-ZÀ-Ú]|$)/.test(t)) return "pre";
+  return "reservado";
+}
+
+function siteEstudiosAfetados(est, unidade) {
+  if (!est) return SITE_ESTUDIOS[unidade].slice(); // sem estúdio no título: bloqueia a unidade toda (por segurança)
+  if (est === "A") return ["A", "AB"];
+  if (est === "B") return ["B", "AB"];
+  if (est === "AB") return ["A", "B", "AB"];
+  return [est];
+}
+
+async function siteMontarDisponibilidade(inicioISO, dias) {
+  const inicio = new Date(`${inicioISO}T00:00:00-03:00`);
+  const fim = new Date(inicio.getTime() + dias * 24 * 60 * 60 * 1000);
+  const saida = { aclimacao: {}, belavista: {} };
+  for (const u of Object.keys(SITE_ESTUDIOS)) for (const e of SITE_ESTUDIOS[u]) saida[u][e] = [];
+
+  const agendas = [["aclimacao", CALENDAR_IDS[0]], ["belavista", CALENDAR_IDS[1]]];
+  for (const [unidade, calId] of agendas) {
+    if (!calId) continue;
+    let pageToken;
+    do {
+      const res = await calendar.events.list({
+        calendarId: calId,
+        timeMin: inicio.toISOString(),
+        timeMax: fim.toISOString(),
+        singleEvents: true,
+        orderBy: "startTime",
+        maxResults: 2500,
+        pageToken,
+      });
+      for (const ev of (res.data.items || [])) {
+        if (ev.status === "cancelled" || ev.transparency === "transparent") continue;
+        if (!ev.start || !ev.start.dateTime) continue; // eventos de dia inteiro são anotações, não reservas
+        const ocupado = { ini: ev.start.dateTime, fim: ev.end.dateTime, status: siteStatusDoEvento(ev) };
+        for (const est of siteEstudiosAfetados(extrairEstudio(ev), unidade)) {
+          if (saida[unidade][est]) saida[unidade][est].push(ocupado);
+        }
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+  }
+  return saida;
+}
+
+app.get("/disponibilidade", async (req, res) => {
+  const origem = req.get("origin");
+  if (SITE_ORIGENS.includes(origem)) res.set("Access-Control-Allow-Origin", origem);
+  res.set("Vary", "Origin");
+  try {
+    const inicioISO = /^\d{4}-\d{2}-\d{2}$/.test(req.query.inicio || "")
+      ? req.query.inicio
+      : new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 42);
+    const chave = `${inicioISO}|${dias}`;
+    const emCache = siteCache.get(chave);
+    if (emCache && Date.now() - emCache.em < 2 * 60 * 1000) return res.json(emCache.dados);
+    const dados = {
+      gerado: new Date().toISOString(),
+      inicio: inicioISO,
+      dias,
+      horario: { abre: 9, fecha: 21 },
+      ocupado: await siteMontarDisponibilidade(inicioISO, dias),
+    };
+    siteCache.set(chave, { em: Date.now(), dados });
+    if (siteCache.size > 50) siteCache.delete(siteCache.keys().next().value);
+    res.set("Cache-Control", "public, max-age=60");
+    res.json(dados);
+  } catch (e) {
+    console.error("Erro /disponibilidade:", e.message);
+    res.status(500).json({ erro: "Não foi possível carregar a agenda agora." });
+  }
+});
+// ===================== fim do bloco da agenda do site =====================
+
 app.get('/', (req, res) => res.send('Bot Telegram ZM Photo — Online'));
 
 app.get('/setup', async (req, res) => {
