@@ -83,6 +83,9 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
 .bar .seg button{color:#fff;min-height:36px;padding:0 12px}
 .bar .seg button[aria-pressed="true"]{background:#fff;color:var(--ink)}
 .bar .seg button[disabled]{opacity:.3;cursor:not-allowed}
+.bar .seg .dv{display:inline-flex;align-items:center;justify-content:center;min-width:64px;font-weight:700;font-size:16px;color:#fff;font-variant-numeric:tabular-nums}
+.bar .seg button[data-act="dur"]{font-size:20px;min-width:44px}
+.iv{position:absolute;left:3px;right:3px;z-index:1;pointer-events:none;background:repeating-linear-gradient(135deg,rgba(150,156,166,.16) 0 4px,transparent 4px 8px)}
 .wa{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;background:#fff;color:var(--ink);font-weight:700;text-decoration:none}
 .x{min-height:44px;padding:0 10px;border:0;background:transparent;color:#C9CDD3;font-weight:600}
 .toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#2A2E35;color:#fff;font-size:14px;padding:10px 14px;border-radius:10px;z-index:20;max-width:calc(100% - 32px)}
@@ -225,7 +228,10 @@ html,body{max-width:100%;overflow-x:hidden}
 
   /* ---------- estado ---------- */
   var MAXD = addDays(HOJE, 60);
-  var st = { view: 'geral', wk: 0, mo: 0, unit: 'aclimacao', day: HOJE, sel: null, dur: 1 };
+  var st = { view: 'geral', wk: 0, mo: 0, unit: 'aclimacao', day: HOJE, sel: null, dur: 120 };
+  // regras: mínimo de 2h, de meia em meia hora, até 8h; 30 min de intervalo entre aluguéis
+  var MINM = 120, MAXM = 480, PASSO = 30, INTERVALO = 30;
+  function fmtDur(m) { var h = Math.floor(m / 60), r = m % 60; return h + 'h' + (r ? pad(r) : ''); }
   var LANES = [['aclimacao', 'A'], ['aclimacao', 'B'], ['aclimacao', 'C'], ['aclimacao', 'D'], ['aclimacao', 'AB'], null, ['belavista', '1'], ['belavista', '2'], ['belavista', '3']];
   var app = document.getElementById('app');
 
@@ -237,20 +243,22 @@ html,body{max-width:100%;overflow-x:hidden}
   function livreEntre(k, u, e, a, b) {
     if (a < minStart(k) || a < HI * 60 || b > HF * 60) return false;
     var L = busy(k, u, e);
-    for (var i = 0; i < L.length; i++) if (L[i].a < b && L[i].b > a) return false;
+    for (var i = 0; i < L.length; i++) { var folga = L[i].s === 'bloqueado' ? 0 : INTERVALO; if (L[i].a < b + folga && L[i].b > a - folga) return false; }
     return true;
   }
-  function durs(k, u, e, a) { var r = []; for (var d = 1; d <= 4; d++) if (livreEntre(k, u, e, a, a + d * 60)) r.push(d); return r; }
+  function durs(k, u, e, a) { var r = []; for (var d = MINM; d <= MAXM; d += PASSO) { if (livreEntre(k, u, e, a, a + d)) r.push(d); else break; } return r; }
+  // uma hora conta como livre só se fizer parte de um intervalo livre de pelo menos 2 horas
+  function horaUtil(k, u, e, hh) { var a = hh * 60; if (!livreEntre(k, u, e, a, a + 60)) return false; for (var t = a - MINM + 60; t <= a; t += PASSO) if (livreEntre(k, u, e, t, t + MINM)) return true; return false; }
   function horasLivres(k, u) {
     var n = 0;
-    UN[u].est.forEach(function (x) { for (var h = HI; h < HF; h++) if (livreEntre(k, u, x[0], h * 60, h * 60 + 60)) n++; });
+    UN[u].est.forEach(function (x) { for (var h = HI; h < HF; h++) if (horaUtil(k, u, x[0], h)) n++; });
     return n;
   }
 
   function nomeEst(e) { return 'Estúdio ' + e; }
   function waLink(s) {
     var U = UN[s.u];
-    var txt = 'Olá! Gostaria de reservar o ' + nomeEst(s.e) + (s.e === 'AB' ? ' (A + B juntos)' : '') + ' na unidade ' + U.nome + ' (' + U.end + '), ' + dMsg(s.k) + ', das ' + hm(s.a) + ' às ' + hm(s.a + s.d * 60) + ' (' + s.d + 'h). Está disponível?';
+    var txt = 'Olá! Gostaria de reservar o ' + nomeEst(s.e) + (s.e === 'AB' ? ' (A + B juntos)' : '') + ' na unidade ' + U.nome + ' (' + U.end + '), ' + dMsg(s.k) + ', das ' + hm(s.a) + ' às ' + hm(s.a + s.d) + ' (' + fmtDur(s.d) + '). Está disponível?';
     return 'https://wa.me/' + WA + '?text=' + encodeURIComponent(txt);
   }
 
@@ -373,8 +381,8 @@ html,body{max-width:100%;overflow-x:hidden}
     var h = '';
     h += '<div class="top"><h1>Agenda de horários</h1><p>Veja a semana de todos os estúdios, toque no que você quer e escolha o horário.</p></div>';
     h += '<div class="ctrl"><div class="seg" role="group" aria-label="Visão"><button type="button" data-act="view" data-v="mes" aria-pressed="' + (st.view === 'mes') + '">Mês</button><button type="button" data-act="view" data-v="geral" aria-pressed="' + (st.view === 'geral') + '">Semana</button><button type="button" data-act="view" data-v="dia" aria-pressed="' + (st.view === 'dia') + '">Dia</button></div><div class="legend"><span><i class="sw l"></i>Livre</span><span><i class="sw c"></i>Ocupado (cor de cada estúdio)</span><span><i class="sw f"></i>Fechado</span><span><i class="sw s"></i>Sua escolha</span></div></div>';
-    if (st.view === 'mes') { h += mes(); h += '<div class="bar"><span class="hint">Toque em um dia para ver os horários livres de cada estúdio.</span></div><p class="foot">Reservas com até 2 meses de antecedência. Horários das 9h às 21h.</p>'; app.innerHTML = h; return; }
-    if (st.view === 'geral') { h += semana(); h += '<div class="bar"><span class="hint">Toque em um estúdio, em qualquer dia, para ver os horários de perto.</span></div><p class="foot">Horários das 9h às 21h. A reserva é confirmada pela nossa equipe no WhatsApp.</p>'; app.innerHTML = h; return; }
+    if (st.view === 'mes') { h += mes(); h += '<div class="bar"><span class="hint">Toque em um dia para ver os horários livres de cada estúdio.</span></div><p class="foot">Reservas com até 2 meses de antecedência. Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora.</p>'; app.innerHTML = h; return; }
+    if (st.view === 'geral') { h += semana(); h += '<div class="bar"><span class="hint">Toque em um estúdio, em qualquer dia, para ver os horários de perto.</span></div><p class="foot">Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>'; app.innerHTML = h; return; }
     h += '<div class="row2"><div class="seg" role="group" aria-label="Unidade">';
     ['aclimacao', 'belavista'].forEach(function (u) { h += '<button type="button" data-act="unit" data-v="' + u + '" aria-pressed="' + (st.unit === u) + '">' + UN[u].nome + '</button>'; });
     h += '</div></div>';
@@ -397,8 +405,9 @@ html,body{max-width:100%;overflow-x:hidden}
       var e = x[0];
       h += '<div class="col" data-e="' + e + '" role="button" tabindex="-1" aria-label="' + nomeEst(e) + '">';
       if (pastPx > 0) h += '<div class="past" style="height:' + pastPx + 'px"></div>';
-      for (var fh = HI; fh < HF; fh++) if (livreEntre(k, st.unit, e, fh * 60, fh * 60 + 60)) h += '<span class="fr" style="top:' + ((fh - HI) * HH) + 'px">Livre</span>';
+      for (var fh = HI; fh < HF; fh++) if (horaUtil(k, st.unit, e, fh)) h += '<span class="fr" style="top:' + ((fh - HI) * HH) + 'px">Livre</span>';
       busy(k, st.unit, e).forEach(function (b) {
+        if (b.s !== 'bloqueado') [[b.a - INTERVALO, b.a], [b.b, b.b + INTERVALO]].forEach(function (f) { var x = Math.max(f[0], HI * 60), y = Math.min(f[1], HF * 60); if (y > x) h += '<div class="iv" style="top:' + ((x - HI * 60) / 60 * HH) + 'px;height:' + ((y - x) / 60 * HH) + 'px" title="Intervalo entre aluguéis"></div>'; });
         var a = Math.max(b.a, HI * 60), z = Math.min(b.b, HF * 60);
         if (z <= a) return;
         var top = (a - HI * 60) / 60 * HH, hgt = (z - a) / 60 * HH - 2;
@@ -409,7 +418,7 @@ html,body{max-width:100%;overflow-x:hidden}
       });
       var s = st.sel;
       if (s && s.k === k && s.u === st.unit && s.e === e) {
-        h += '<div class="sl" style="top:' + ((s.a - HI * 60) / 60 * HH) + 'px;height:' + (s.d * HH - 2) + 'px"><b>' + hm(s.a) + '–' + hm(s.a + s.d * 60) + '</b>Sua escolha</div>';
+        h += '<div class="sl" style="top:' + ((s.a - HI * 60) / 60 * HH) + 'px;height:' + (s.d / 60 * HH - 2) + 'px"><b>' + hm(s.a) + '–' + hm(s.a + s.d) + '</b>Sua escolha</div>';
       }
       h += '</div>';
     });
@@ -419,13 +428,13 @@ html,body{max-width:100%;overflow-x:hidden}
     var s2 = st.sel;
     if (s2) {
       var ok = durs(s2.k, s2.u, s2.e, s2.a);
-      h += '<div class="bar"><div><small>' + nomeEst(s2.e) + ' · ' + UN[s2.u].nome + '</small><strong>' + dLong(s2.k).replace(/^./, function (c) { return c.toUpperCase(); }) + ', das ' + hm(s2.a) + ' às ' + hm(s2.a + s2.d * 60) + '</strong></div><div class="acts"><div class="seg" role="group" aria-label="Duração">';
-      for (var d2 = 1; d2 <= 4; d2++) h += '<button type="button" data-act="dur" data-v="' + d2 + '" aria-pressed="' + (s2.d === d2) + '"' + (ok.indexOf(d2) < 0 ? ' disabled' : '') + '>' + d2 + 'h</button>';
+      h += '<div class="bar"><div><small>' + nomeEst(s2.e) + ' · ' + UN[s2.u].nome + '</small><strong>' + dLong(s2.k).replace(/^./, function (c) { return c.toUpperCase(); }) + ', das ' + hm(s2.a) + ' às ' + hm(s2.a + s2.d) + ' (' + fmtDur(s2.d) + ')</strong></div><div class="acts"><div class="seg" role="group" aria-label="Duração">';
+      h += '<button type="button" data-act="dur" data-v="-30" aria-label="Diminuir meia hora"' + (ok.indexOf(s2.d - PASSO) < 0 ? ' disabled' : '') + '>−</button><span class="dv">' + fmtDur(s2.d) + '</span><button type="button" data-act="dur" data-v="30" aria-label="Aumentar meia hora"' + (ok.indexOf(s2.d + PASSO) < 0 ? ' disabled' : '') + '>+</button>';
       h += '</div><a class="wa" href="' + waLink(s2) + '" target="_blank" rel="noopener">Reservar pelo WhatsApp</a><button type="button" class="x" data-act="clear">Limpar</button></div></div>';
     } else {
       h += '<div class="bar"><span class="hint">Toque num espaço branco da agenda para escolher o horário.</span></div>';
     }
-    h += '<p class="foot">Horários das 9h às 21h. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
+    h += '<p class="foot">Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
     app.innerHTML = h;
     var strip = app.querySelector('.days'), on = strip && strip.querySelector('[aria-pressed="true"]');
     if (on) strip.scrollLeft = on.offsetLeft - strip.offsetLeft - strip.clientWidth / 2 + on.clientWidth / 2;
@@ -442,7 +451,7 @@ html,body{max-width:100%;overflow-x:hidden}
     var r = col.getBoundingClientRect();
     var y = ev.clientY - r.top;
     var m = HI * 60 + Math.floor(y / HH * 2) * 30;
-    return Math.max(HI * 60, Math.min(HF * 60 - 30, m));
+    return Math.max(HI * 60, Math.min(HF * 60 - MINM, m));
   }
 
   app.addEventListener('click', function (ev) {
@@ -455,7 +464,7 @@ html,body{max-width:100%;overflow-x:hidden}
       else if (a === 'wk') { st.wk = Math.max(0, Math.min(8, st.wk + (+v))); }
       else if (a === 'openday') { st.view = 'dia'; st.day = v; st.sel = null; render(); window.scrollTo({ top: 0 }); return; }
       else if (a === 'day') { st.day = v; }
-      else if (a === 'dur') { if (st.sel) { st.sel.d = +v; st.dur = +v; } }
+      else if (a === 'dur') { if (st.sel) { var nd = st.sel.d + (+v), okd = durs(st.sel.k, st.sel.u, st.sel.e, st.sel.a); if (okd.indexOf(nd) >= 0) { st.sel.d = nd; st.dur = nd; } } }
       else if (a === 'clear') { st.sel = null; }
       render();
       return;
@@ -464,7 +473,7 @@ html,body{max-width:100%;overflow-x:hidden}
     if (wr) {
       var br = wr.querySelector('.wm-bar').getBoundingClientRect();
       var mx = HI * 60 + Math.floor(Math.max(0, ev.clientX - br.left) / br.width * (HF - HI) * 2) * 30;
-      mx = Math.max(HI * 60, Math.min(HF * 60 - 60, mx));
+      mx = Math.max(HI * 60, Math.min(HF * 60 - MINM, mx));
       st.view = 'dia'; st.day = wr.getAttribute('data-k'); st.unit = wr.getAttribute('data-u');
       var e3 = wr.getAttribute('data-e'), ok3 = durs(st.day, st.unit, e3, mx);
       st.sel = ok3.length ? { k: st.day, u: st.unit, e: e3, a: mx, d: ok3.indexOf(st.dur) >= 0 ? st.dur : ok3[0] } : null;
@@ -475,7 +484,7 @@ html,body{max-width:100%;overflow-x:hidden}
     var ln = ev.target.closest('.ln');
     if (ln) {
       var r = ln.getBoundingClientRect(), mm = HI * 60 + Math.floor((ev.clientY - r.top) / 34 * 2) * 30;
-      mm = Math.max(HI * 60, Math.min(HF * 60 - 60, mm));
+      mm = Math.max(HI * 60, Math.min(HF * 60 - MINM, mm));
       st.view = 'dia'; st.day = ln.getAttribute('data-k'); st.unit = ln.getAttribute('data-u');
       var e2 = ln.getAttribute('data-e'), ok2 = durs(st.day, st.unit, e2, mm);
       st.sel = ok2.length ? { k: st.day, u: st.unit, e: e2, a: mm, d: ok2.indexOf(st.dur) >= 0 ? st.dur : ok2[0] } : null;
@@ -489,7 +498,7 @@ html,body{max-width:100%;overflow-x:hidden}
     var e = col.getAttribute('data-e'), m = slotFromEvent(ev, col);
     if (m < minStart(st.day)) { toast('Esse horário já passou.'); return; }
     var ok = durs(st.day, st.unit, e, m);
-    if (!ok.length) { toast('Aqui não cabe 1 hora livre. Escolha outro horário.'); return; }
+    if (!ok.length) { toast('Aqui não cabem 2 horas (mínimo de 2h, com 30 min de intervalo entre aluguéis). Escolha outro horário.'); return; }
     var d = ok.indexOf(st.dur) >= 0 ? st.dur : ok[ok.length - 1] < st.dur ? ok[ok.length - 1] : ok[0];
     st.sel = { k: st.day, u: st.unit, e: e, a: m, d: d };
     render();
@@ -503,11 +512,11 @@ html,body{max-width:100%;overflow-x:hidden}
     var e = col.getAttribute('data-e'), m = slotFromEvent(ev, col);
     var ok = durs(st.day, st.unit, e, m);
     if (!ok.length) { if (ghost) { ghost.remove(); ghost = null; } return; }
-    var d = ok.indexOf(st.dur) >= 0 ? st.dur : 1;
+    var d = ok.indexOf(st.dur) >= 0 ? st.dur : ok[0];
     if (!ghost) { ghost = document.createElement('div'); ghost.className = 'gh-ghost'; }
     if (ghost.parentNode !== col) col.appendChild(ghost);
     ghost.style.top = ((m - HI * 60) / 60 * HH) + 'px';
-    ghost.style.height = (d * HH - 2) + 'px';
+    ghost.style.height = (d / 60 * HH - 2) + 'px';
     ghost.textContent = '+ ' + hm(m);
   });
   app.addEventListener('mouseleave', function () { if (ghost) { ghost.remove(); ghost = null; } });

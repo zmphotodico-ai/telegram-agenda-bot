@@ -908,12 +908,12 @@ JSON:`;
 
 function montarDatas(dados) {
   const agora = new Date();
-  let ano = agora.getFullYear();
+  let ano = dados.ano || agora.getFullYear();
   const p = (n) => String(n).padStart(2, "0");
   const montaISO = (a) =>
     `${a}-${p(dados.mes)}-${p(dados.dia)}T${p(dados.h1)}:${p(dados.m1)}:00-03:00`;
   let inicio = new Date(montaISO(ano));
-  if (inicio < agora && (agora - inicio) > 7 * 24 * 3600 * 1000) {
+  if (!dados.ano && inicio < agora && (agora - inicio) > 7 * 24 * 3600 * 1000) {
     ano = ano + 1;
     inicio = new Date(montaISO(ano));
   }
@@ -950,6 +950,113 @@ async function horarioOcupado(calId, estudio, inicio, fim) {
     console.error("Erro ao checar conflito:", e.message);
     return null;
   }
+}
+
+// ===================== REGRAS DE ALUGUEL =====================
+// mínimo de 2h; 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B);
+// 15 a 29 min só com confirmação explícita (ok15); menos de 15 min nunca.
+// Bloqueios/fechamentos (BLOQ, FECHAD, MANUTEN) não exigem intervalo, só não podem sobrepor.
+const ALUGUEL_MIN_MINUTOS = 120;
+const INTERVALO_NORMAL_MIN = 30;
+const INTERVALO_MINIMO_MIN = 15;
+
+function ehBloqueio(ev) {
+  return /BLOQ|FECHAD|MANUTEN/i.test(ev.summary || "");
+}
+
+// regra pura (sem chamar a agenda): eventos = eventos do mesmo calendário perto do horário.
+// devolve { status: 'ok' | 'apertado' | 'recusa', motivo, ev, intervalo }
+function classificarRegrasAluguel(estudio, inicio, fim, eventos) {
+  const dur = Math.round((fim - inicio) / 60000);
+  if (dur < ALUGUEL_MIN_MINUTOS) return { status: "recusa", motivo: "duracao", duracao: dur };
+  const conflitantes = estudiosConflitantes(estudio);
+  let apertado = null;
+  for (const ev of (eventos || [])) {
+    if (ev.status === "cancelled") continue;
+    if (!conflitantes.includes(extrairEstudio(ev))) continue;
+    const ei = new Date(ev.start.dateTime || ev.start.date);
+    const ef = new Date(ev.end.dateTime || ev.end.date);
+    if (inicio < ef && fim > ei) return { status: "recusa", motivo: "conflito", ev };
+    if (ehBloqueio(ev)) continue;
+    const intervalo = Math.round((ei >= fim ? ei - fim : inicio - ef) / 60000);
+    if (intervalo < INTERVALO_MINIMO_MIN) return { status: "recusa", motivo: "intervalo", ev, intervalo };
+    if (intervalo < INTERVALO_NORMAL_MIN && (!apertado || intervalo < apertado.intervalo)) apertado = { status: "apertado", ev, intervalo };
+  }
+  return apertado || { status: "ok" };
+}
+
+async function checarRegrasAluguel(calId, estudio, inicio, fim) {
+  const folga = INTERVALO_NORMAL_MIN * 60000;
+  const res = await calendar.events.list({
+    calendarId: calId,
+    timeMin: new Date(inicio.getTime() - folga).toISOString(),
+    timeMax: new Date(fim.getTime() + folga).toISOString(),
+    singleEvents: true,
+    orderBy: "startTime",
+  });
+  return classificarRegrasAluguel(estudio, inicio, fim, res.data.items || []);
+}
+
+function descreverEventoCurto(ev) {
+  const fmt = { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' };
+  const ei = new Date(ev.start.dateTime || ev.start.date);
+  const ef = new Date(ev.end.dateTime || ev.end.date);
+  const dataFmt = ei.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  return `"${ev.summary}" em ${dataFmt}, das ${ei.toLocaleTimeString("pt-BR", fmt)} às ${ef.toLocaleTimeString("pt-BR", fmt)}`;
+}
+
+// ===================== MENSAGEM COLADA DO SITE =====================
+// formato gerado pela agenda do site:
+// "Olá! Gostaria de reservar o Estúdio C na unidade Aclimação (Rua Gualaxo, 206), quarta, 07/10, das 18:00 às 20:30 (2h30). Está disponível?"
+// Extrai estúdio, data e horário sem IA. Devolve null se não for uma mensagem do site.
+function interpretarMensagemSite(texto, hojeISO) {
+  const t = (texto || "").replace(/\s+/g, " ");
+  const mEst = t.match(/gostaria de reservar o est[úu]dio\s+(AB|[ABCD]|[123])\b/i);
+  if (!mEst) return null;
+  const depois = t.slice(mEst.index);
+  const mData = depois.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+  const mHora = depois.match(/das\s+(\d{1,2}):(\d{2})\s+[àa]s\s+(\d{1,2}):(\d{2})/i);
+  const mUn = depois.match(/na unidade\s+(aclima[çc][ãa]o|bela vista)/i);
+  let estudio = mEst[1].toUpperCase();
+  const ag = agendaDoEstudio(estudio);
+  let unidadeErrada = false;
+  if (mUn && ag) {
+    const unTexto = /bela/i.test(mUn[1]) ? "Bela Vista" : "Aclimação";
+    if (unTexto !== ag.unidade) { unidadeErrada = true; estudio = null; }
+  }
+  const datas = [];
+  if (mData) {
+    const v = validarData(`${mData[1]}/${mData[2]}`);
+    if (v) {
+      // ano = o próximo em que a data ainda não passou (hoje conta como não passou)
+      const hoje = hojeISO || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+      const anoHoje = parseInt(hoje.slice(0, 4));
+      const p = (n) => String(n).padStart(2, "0");
+      const ano = `${anoHoje}-${p(v.mes)}-${p(v.dia)}` < hoje ? anoHoje + 1 : anoHoje;
+      datas.push({ dia: v.dia, mes: v.mes, ano });
+    }
+  }
+  let horario = null;
+  if (mHora) horario = validarHorario(`${mHora[1]}:${mHora[2]}-${mHora[3]}:${mHora[4]}`);
+  // o que vier depois de "Está disponível?" pode ser nome/telefone do cliente
+  const mFim = t.match(/est[áa] dispon[íi]vel\?/i);
+  const resto = mFim ? t.slice(mFim.index + mFim[0].length).trim() : "";
+  return { datas, horario, estudio, unidadeErrada, resto };
+}
+
+// completa a mensagem do site com nome/telefone (IA só para isso, e só se houver texto extra)
+async function camposDaMensagemSite(site) {
+  const campos = { datas: site.datas, horario: site.horario, estudio: site.estudio, nome: null, telefone: null, tipo: null };
+  if (site.resto) {
+    const ia = await interpretarAgendamento(site.resto);
+    if (ia._ok) { campos.nome = ia.nome; campos.telefone = ia.telefone; }
+    else {
+      const simples = extrairCamposAgendamento(site.resto);
+      campos.nome = simples.nome;
+      if (simples.telefone) campos.telefone = simples.telefone.length <= 11 ? "55" + simples.telefone : simples.telefone;
+    }
+  }
+  return campos;
 }
 
 const ENDERECO_ACLIMACAO = "Rua Gualaxo, 206 - Aclimação/Liberdade - CEP 01533-020";
@@ -1076,6 +1183,69 @@ async function criarEvento(dados) {
   if (cor) eventBody.colorId = cor;
   await calendar.events.insert({ calendarId: dados.calId, requestBody: eventBody });
   return titulo;
+}
+
+// confere as regras de aluguel de todas as reservas e, se estiver tudo certo, cria os eventos.
+// conflito, intervalo < 15 min ou duração < 2h: avisa e não cria nada.
+// intervalo de 15 a 29 min: pede "ok15" (conversa.ok15) antes de criar.
+async function concluirAgendamento(chatId, conversa) {
+  const d = conversa.dados;
+  const apertados = [];
+  for (const r of conversa.reservas) {
+    const { inicio, fim } = montarDatas(r);
+    r.inicio = inicio; r.fim = fim;
+    let regra;
+    try {
+      regra = await checarRegrasAluguel(r.calId, r.estudio, inicio, fim);
+    } catch (e) {
+      console.error("Erro ao checar regras de aluguel:", e.message);
+      await sendMessage(chatId, `❌ Não consegui conferir a agenda agora (${e.message}). Nenhuma reserva foi criada. Tente de novo em instantes.`);
+      delete conversasAgendamento[chatId];
+      return;
+    }
+    const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+    if (regra.status === "recusa") {
+      let motivo;
+      if (regra.motivo === "duracao") motivo = `A duração mínima é de 2 horas (este pedido tem ${Math.floor(regra.duracao / 60)}h${regra.duracao % 60 ? String(regra.duracao % 60).padStart(2, "0") : ""}).`;
+      else if (regra.motivo === "conflito") motivo = `O estúdio ${r.estudio} já está ocupado em ${dataFmt}.\nJá existe: ${descreverEventoCurto(regra.ev)}.`;
+      else motivo = `Intervalo de só ${regra.intervalo} min com outro aluguel (mínimo 15, o normal é 30).\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
+      await sendMessage(chatId, `❌ ${motivo}\n\nNenhuma reserva foi criada. Refaça com outro horário.`);
+      delete conversasAgendamento[chatId];
+      return;
+    }
+    if (regra.status === "apertado") apertados.push({ r, regra, dataFmt });
+  }
+  if (apertados.length && !conversa.ok15) {
+    const linhas = apertados.map(a => `• Estúdio ${a.r.estudio} em ${a.dataFmt}: perto de ${descreverEventoCurto(a.regra.ev)}`).join("\n");
+    const menor = Math.min(...apertados.map(a => a.regra.intervalo));
+    conversa.passo = 'ok15';
+    await sendMessage(chatId, `⚠️ Intervalo apertado: ${menor} min (o normal é 30). Responda *ok15* para criar mesmo assim.\n${linhas}\n\n_(ou *NÃO* para cancelar)_`);
+    return;
+  }
+  let pagoFinal = d.pago;
+  if (pagoFinal) {
+    const minimoTotal = conversa.reservas.length * 50;
+    if (parseFloat(pagoFinal) < minimoTotal) {
+      pagoFinal = String(minimoTotal);
+      await sendMessage(chatId, `ℹ️ O valor informado é menor que o mínimo (R$50/dia). Ajustei para R$${minimoTotal} (${conversa.reservas.length} dia(s)).`);
+    }
+  }
+  const titulos = [];
+  try {
+    for (const r of conversa.reservas) {
+      const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar, confirmarPresenca: d.confirmarPresenca });
+      titulos.push(titulo);
+    }
+    const lista = titulos.map(t => `📌 ${t}`).join("\n");
+    const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "\n✋ confirmar presença (não cobra sinal)" : "\n🔖 pré-reserva"));
+    await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
+    await esperar(1500);
+    const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
+    await enviarTextoELink(chatId, msgCliente, d.telefone);
+  } catch (e) {
+    await sendMessage(chatId, `❌ Erro ao criar o(s) evento(s): ${e.message}`);
+  }
+  delete conversasAgendamento[chatId];
 }
 
 async function buscarTelefoneConhecido(nomeBuscado) {
@@ -1921,11 +2091,17 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
+      // mensagem do site colada (sem comando) = "!agendar " + mensagem
+      const ehMensagemSite = !textoMensagem.startsWith('!') && /gostaria de reservar o est[úu]dio/i.test(textoOriginal);
+
       // !agendar COM dados soltos (ex.: "!agendar amanhã 14-16 A João 11999998888")
-      if (/^!agendar\s+\S/.test(textoOriginal) && !/^!agendar\s+\d+$/.test(textoMensagem)) {
+      if (ehMensagemSite || (/^!agendar\s+\S/.test(textoOriginal) && !/^!agendar\s+\d+$/.test(textoMensagem))) {
         const bruto = textoOriginal.replace(/^!agendar\s+/i, "").trim();
         await sendMessage(chatId, "🔎 Entendendo os dados, um instante...");
-        const campos = await interpretarAgendamento(bruto);
+        // mensagem do site: estúdio, data e horário lidos direto do texto (IA só para nome/telefone)
+        const site = interpretarMensagemSite(bruto);
+        const campos = site ? await camposDaMensagemSite(site) : await interpretarAgendamento(bruto);
+        if (site && site.unidadeErrada) await sendMessage(chatId, "⚠️ O estúdio da mensagem não é da unidade citada. Vou perguntar o estúdio.");
 
         if (campos.datas.length === 0 && !campos.horario && !campos.estudio && !campos.nome && !campos.telefone) {
           // não deu pra extrair nada útil — cai no passo a passo normal
@@ -1940,6 +2116,7 @@ app.post("/webhook", async (req, res) => {
         if (campos.datas.length > 0) {
           for (const dt of campos.datas) {
             const r = { dia: dt.dia, mes: dt.mes };
+            if (dt.ano) r.ano = dt.ano;
             if (campos.horario) { r.h1 = campos.horario.h1; r.m1 = campos.horario.m1; r.h2 = campos.horario.h2; r.m2 = campos.horario.m2; }
             if (est) { r.estudio = est.estudio; r.calId = est.calId; r.unidade = est.unidade; }
             conversa.reservas.push(r);
@@ -2133,47 +2310,25 @@ app.post("/webhook", async (req, res) => {
           return;
         }
 
+        // intervalo apertado (15 a 29 min): só cria com "ok15"
+        if (conversa.passo === 'ok15') {
+          if (textoMensagem === 'ok15') {
+            conversa.ok15 = true;
+            await concluirAgendamento(chatId, conversa);
+            return;
+          }
+          if (textoMensagem === 'nao' || textoMensagem === 'não') {
+            delete conversasAgendamento[chatId];
+            await sendMessage(chatId, "Agendamento cancelado. 👍");
+            return;
+          }
+          await sendMessage(chatId, "Responda *ok15* para criar mesmo assim, ou *NÃO* para cancelar:");
+          return;
+        }
+
         if (conversa.passo === 'confirmar') {
           if (textoMensagem === 'sim') {
-            for (const r of conversa.reservas) {
-              const { inicio, fim } = montarDatas(r);
-              r.inicio = inicio; r.fim = fim;
-              const conflito = await horarioOcupado(r.calId, r.estudio, inicio, fim);
-              if (conflito) {
-                const ci = new Date(conflito.start.dateTime || conflito.start.date);
-                const cf = new Date(conflito.end.dateTime || conflito.end.date);
-                const hi = ci.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-                const hf = cf.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-                const dataFmt = ci.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-                await sendMessage(chatId, `❌ O estúdio ${r.estudio} já está ocupado em ${dataFmt}!\nJá existe: "${conflito.summary}" das ${hi} às ${hf}.\n\nNenhuma reserva foi criada. Tente novamente.`);
-                delete conversasAgendamento[chatId];
-                return;
-              }
-            }
-            let pagoFinal = d.pago;
-            if (pagoFinal) {
-              const minimoTotal = conversa.reservas.length * 50;
-              if (parseFloat(pagoFinal) < minimoTotal) {
-                pagoFinal = String(minimoTotal);
-                await sendMessage(chatId, `ℹ️ O valor informado é menor que o mínimo (R$50/dia). Ajustei para R$${minimoTotal} (${conversa.reservas.length} dia(s)).`);
-              }
-            }
-            const titulos = [];
-            try {
-              for (const r of conversa.reservas) {
-                const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar, confirmarPresenca: d.confirmarPresenca });
-                titulos.push(titulo);
-              }
-              const lista = titulos.map(t => `📌 ${t}`).join("\n");
-              const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "\n✋ confirmar presença (não cobra sinal)" : "\n🔖 pré-reserva"));
-              await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
-              await esperar(1500);
-              const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
-              await enviarTextoELink(chatId, msgCliente, d.telefone);
-            } catch (e) {
-              await sendMessage(chatId, `❌ Erro ao criar o(s) evento(s): ${e.message}`);
-            }
-            delete conversasAgendamento[chatId];
+            await concluirAgendamento(chatId, conversa);
             return;
           }
           if (textoMensagem === 'nao' || textoMensagem === 'não') {
@@ -2329,6 +2484,7 @@ app.post("/webhook", async (req, res) => {
           "!status — diz se o respondedor está ligado\n" +
           "!ativar / !desativar — liga/desliga o respondedor\n" +
           "!agendar — cria uma nova reserva (passo a passo)\n" +
+          "Cole a mensagem do site (Gostaria de reservar o Estúdio...) para agendar direto\n" +
           "!meuid — mostra seu ID\n\n" +
           "_Lembrete: este bot nunca manda mensagem direto pro cliente — ele sempre entrega o texto + um link pronto do WhatsApp, pra vocês conferirem e apertarem Enviar._"
         );
@@ -2499,14 +2655,22 @@ async function conferirAgenda(dias = 60) {
         problemas.push(`⚠️ ${nomeUn} · ${quando} · "${titulo}"\n   o estúdio ${est} não é desta unidade — está na agenda errada ou com o número errado?`);
         continue;
       }
-      comEstudio.push({ titulo, est, ini: Date.parse(ev.start.dateTime), fim: Date.parse(ev.end.dateTime) });
+      comEstudio.push({ titulo, est, bloqueio, ini: Date.parse(ev.start.dateTime), fim: Date.parse(ev.end.dateTime) });
     }
     for (let i = 0; i < comEstudio.length; i++) {
       for (let j = i + 1; j < comEstudio.length; j++) {
         const a = comEstudio[i], b = comEstudio[j];
-        if (!(a.ini < b.fim && b.ini < a.fim)) continue;
         if (!siteEstudiosAfetados(a.est, unidade).includes(b.est)) continue;
-        problemas.push(`🔴 ${nomeUn} · conflito no mesmo horário:\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
+        if (a.ini < b.fim && b.ini < a.fim) {
+          problemas.push(`🔴 ${nomeUn} · conflito no mesmo horário:\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
+          continue;
+        }
+        // intervalo curto: menos de 15 min entre dois aluguéis do mesmo estúdio (bloqueios não contam)
+        if (a.bloqueio || b.bloqueio) continue;
+        const intervalo = Math.round((a.ini >= b.fim ? a.ini - b.fim : b.ini - a.fim) / 60000);
+        if (intervalo < INTERVALO_MINIMO_MIN) {
+          problemas.push(`⏱️ ${nomeUn} · intervalo curto (${intervalo} min, o mínimo é 15):\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
+        }
       }
     }
   }
