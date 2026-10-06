@@ -16,6 +16,7 @@
 }
 html,body{background:var(--bg)}
 html,body{margin:0}
+html,body{max-width:100%;overflow-x:hidden}
 body{color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.35;padding-inline:16px;padding-block:16px 28px}
 *{box-sizing:border-box}
 button{font:inherit;cursor:pointer;color:inherit}
@@ -134,7 +135,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
 .ml i{position:absolute;left:0;right:0}
 .mini .sep{flex:0 0 3px}
 @media (max-width:600px){.mo{gap:3px;padding:6px}.md{min-height:80px;padding:4px;border-radius:8px}.md .pill{display:none}.mini{gap:1px;height:40px}.mini .sep{flex-basis:2px}.md .n small{display:none}}
-@media (max-width:600px){.top h1{font-size:23px}.bar strong{font-size:15px}.bar .hint{font-size:14px}.bk b,.sl b+span{display:none!important}.bk{padding:4px;font-size:10.5px}.calh span{display:block}}
+@media (max-width:600px){.top h1{font-size:23px}.bar strong{font-size:15px}.bar .hint{font-size:14px}.bk b,.sl b+span{display:none!important}.bk{padding:4px;font-size:10.5px}.calh span{display:block}.wk{min-width:calc(40px + 7 * 150px)}}
 @media (prefers-reduced-motion:no-preference){.sl{transition:top .12s,height .12s}}
 </style>
 </head>
