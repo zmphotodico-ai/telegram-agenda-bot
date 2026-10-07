@@ -85,6 +85,18 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
 .bar .seg button[disabled]{opacity:.3;cursor:not-allowed}
 .bar .seg .dv{display:inline-flex;align-items:center;justify-content:center;min-width:64px;font-weight:700;font-size:16px;color:#fff;font-variant-numeric:tabular-nums}
 .bar .seg button[data-act="dur"]{font-size:20px;min-width:44px}
+.pop{position:absolute;z-index:8;width:min(264px, calc(100% - 52px));background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(22,24,29,.18);padding:12px;display:flex;flex-direction:column;gap:10px}
+.pop-x{position:absolute;top:6px;right:6px;width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:20px;line-height:1}
+.pop-x:hover{background:#F1F2F4}
+.pop-t{font-size:12px;color:var(--muted);padding-right:30px}
+.pop-h{font-size:14px;line-height:1.35}
+.pop-h b{font-size:18px;font-variant-numeric:tabular-nums}
+.pop-r{display:flex;align-items:center;justify-content:space-between;background:#F1F2F4;border-radius:12px;padding:4px}
+.pop-r button{width:48px;height:44px;border:0;border-radius:9px;background:#fff;font-size:22px;font-weight:700;color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.pop-r button[disabled]{opacity:.35;cursor:not-allowed;box-shadow:none}
+.pop-r span{font-weight:700;font-size:17px;font-variant-numeric:tabular-nums}
+.pop-wa{display:flex;align-items:center;justify-content:center;min-height:46px;border-radius:12px;background:#1F8F4E;color:#fff;font-weight:700;font-size:15px;text-decoration:none}
+.pop-wa:hover{background:#18763F}
 .iv{position:absolute;left:3px;right:3px;z-index:1;pointer-events:none;background:repeating-linear-gradient(135deg,rgba(150,156,166,.16) 0 4px,transparent 4px 8px)}
 .wa{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;background:#fff;color:var(--ink);font-weight:700;text-decoration:none}
 .x{min-height:44px;padding:0 10px;border:0;background:transparent;color:#C9CDD3;font-weight:600}
@@ -423,15 +435,30 @@ html,body{max-width:100%;overflow-x:hidden}
       h += '</div>';
     });
     if (k === HOJE && ms > HI * 60 && ms < HF * 60) h += '<div class="now" style="top:' + (10 + (ms - HI * 60) / 60 * HH - 1) + 'px"></div>';
+    // quadrinho junto do horário escolhido: ajustar horas e reservar
+    var sp = st.sel, popAqui = sp && sp.k === k && sp.u === st.unit;
+    if (popAqui) {
+      var n = U.est.length, idx = 0;
+      U.est.forEach(function (x, i) { if (x[0] === sp.e) idx = i; });
+      var okp = durs(sp.k, sp.u, sp.e, sp.a);
+      var baixo = 10 + (sp.a + sp.d - HI * 60) / 60 * HH + 8, cima = 10 + (sp.a - HI * 60) / 60 * HH - 8;
+      var emCima = baixo > (HF - HI) * HH - 150;
+      var lado = idx < n / 2 ? 'left:calc(46px + (100% - 46px) * ' + idx + ' / ' + n + ')' : 'right:calc((100% - 46px) * ' + (n - idx - 1) + ' / ' + n + ')';
+      h += '<div class="pop" role="dialog" aria-label="Seu horário" style="' + lado + ';top:' + (emCima ? cima : baixo) + 'px' + (emCima ? ';transform:translateY(-100%)' : '') + '">';
+      h += '<button type="button" class="pop-x" data-act="clear" aria-label="Limpar escolha">×</button>';
+      h += '<div class="pop-t">' + nomeEst(sp.e) + ' · ' + UN[sp.u].nome + '</div><div class="pop-h">' + cap(dLong(sp.k)) + '<br><b>' + hm(sp.a) + ' – ' + hm(sp.a + sp.d) + '</b></div>';
+      h += '<div class="pop-r"><button type="button" data-act="dur" data-v="-30" aria-label="Menos meia hora"' + (okp.indexOf(sp.d - PASSO) < 0 ? ' disabled' : '') + '>−</button><span>' + fmtDur(sp.d) + '</span><button type="button" data-act="dur" data-v="30" aria-label="Mais meia hora"' + (okp.indexOf(sp.d + PASSO) < 0 ? ' disabled' : '') + '>+</button></div>';
+      h += '<a class="pop-wa" href="' + waLink(sp) + '" target="_blank" rel="noopener">Reservar pelo WhatsApp</a></div>';
+    }
     h += '</div></div></div></div>';
-    // barra
+    // barra (só aparece quando o horário escolhido não está na tela)
     var s2 = st.sel;
-    if (s2) {
+    if (s2 && !popAqui) {
       var ok = durs(s2.k, s2.u, s2.e, s2.a);
       h += '<div class="bar"><div><small>' + nomeEst(s2.e) + ' · ' + UN[s2.u].nome + '</small><strong>' + dLong(s2.k).replace(/^./, function (c) { return c.toUpperCase(); }) + ', das ' + hm(s2.a) + ' às ' + hm(s2.a + s2.d) + ' (' + fmtDur(s2.d) + ')</strong></div><div class="acts"><div class="seg" role="group" aria-label="Duração">';
       h += '<button type="button" data-act="dur" data-v="-30" aria-label="Diminuir meia hora"' + (ok.indexOf(s2.d - PASSO) < 0 ? ' disabled' : '') + '>−</button><span class="dv">' + fmtDur(s2.d) + '</span><button type="button" data-act="dur" data-v="30" aria-label="Aumentar meia hora"' + (ok.indexOf(s2.d + PASSO) < 0 ? ' disabled' : '') + '>+</button>';
       h += '</div><a class="wa" href="' + waLink(s2) + '" target="_blank" rel="noopener">Reservar pelo WhatsApp</a><button type="button" class="x" data-act="clear">Limpar</button></div></div>';
-    } else {
+    } else if (!s2) {
       h += '<div class="bar"><span class="hint">Toque num espaço branco da agenda para escolher o horário.</span></div>';
     }
     h += '<p class="foot">Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
@@ -440,6 +467,7 @@ html,body{max-width:100%;overflow-x:hidden}
     if (on) strip.scrollLeft = on.offsetLeft - strip.offsetLeft - strip.clientWidth / 2 + on.clientWidth / 2;
   }
 
+  function mostrarEscolha() { var el = app.querySelector('.sl'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else window.scrollTo({ top: 0 }); }
   var toastT;
   function toast(msg) {
     var old = document.querySelector('.toast'); if (old) old.remove();
@@ -477,7 +505,7 @@ html,body{max-width:100%;overflow-x:hidden}
       st.view = 'dia'; st.day = wr.getAttribute('data-k'); st.unit = wr.getAttribute('data-u');
       var e3 = wr.getAttribute('data-e'), ok3 = durs(st.day, st.unit, e3, mx);
       st.sel = ok3.length ? { k: st.day, u: st.unit, e: e3, a: mx, d: ok3.indexOf(st.dur) >= 0 ? st.dur : ok3[0] } : null;
-      render(); window.scrollTo({ top: 0 });
+      render(); mostrarEscolha();
       if (!ok3.length) toast('Esse horário do Estúdio ' + e3 + ' está ocupado. Veja os espaços brancos.');
       return;
     }
@@ -488,7 +516,7 @@ html,body{max-width:100%;overflow-x:hidden}
       st.view = 'dia'; st.day = ln.getAttribute('data-k'); st.unit = ln.getAttribute('data-u');
       var e2 = ln.getAttribute('data-e'), ok2 = durs(st.day, st.unit, e2, mm);
       st.sel = ok2.length ? { k: st.day, u: st.unit, e: e2, a: mm, d: ok2.indexOf(st.dur) >= 0 ? st.dur : ok2[0] } : null;
-      render(); window.scrollTo({ top: 0 });
+      render(); mostrarEscolha();
       if (!ok2.length) toast('Esse horário do Estúdio ' + e2 + ' está ocupado. Veja os espaços brancos.');
       return;
     }
