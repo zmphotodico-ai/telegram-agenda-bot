@@ -4,6 +4,7 @@ import { google } from "googleapis";
 import cron from "node-cron";
 
 const app = express();
+app.use("/pedido", express.json({ limit: "2kb" })); // pedido do site: corpo pequeno
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
@@ -953,26 +954,63 @@ async function horarioOcupado(calId, estudio, inicio, fim) {
 }
 
 // ===================== REGRAS DE ALUGUEL =====================
-// mínimo de 2h; 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B);
+// mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
+// 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B);
 // 15 a 29 min só com confirmação explícita (ok15); menos de 15 min nunca.
 // Bloqueios/fechamentos (BLOQ, FECHAD, MANUTEN) não exigem intervalo, só não podem sobrepor.
 const ALUGUEL_MIN_MINUTOS = 120;
+const ALUGUEL_MIN_FDS_FERIADO = { aclimacao: 180, belavista: 240 };
 const INTERVALO_NORMAL_MIN = 30;
 const INTERVALO_MINIMO_MIN = 15;
+
+// mesma lista do agenda.html
+const FERIADOS = [
+  "2026-01-01", "2026-01-25", "2026-02-16", "2026-02-17", "2026-04-03", "2026-04-21", "2026-05-01", "2026-06-04",
+  "2026-07-09", "2026-09-07", "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20", "2026-12-25",
+  "2027-01-01", "2027-01-25", "2027-02-08", "2027-02-09", "2027-03-26", "2027-04-21", "2027-05-01", "2027-05-27",
+  "2027-07-09", "2027-09-07", "2027-10-12", "2027-11-02", "2027-11-15", "2027-11-20", "2027-12-25",
+];
+
+function dataISOemSP(d) {
+  return new Date(d).toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+// "2026-10-17" → true se for sábado, domingo ou feriado
+function ehFdsOuFeriado(dataISO) {
+  const dw = new Date(`${dataISO}T12:00:00-03:00`).getUTCDay();
+  return dw === 0 || dw === 6 || FERIADOS.includes(dataISO);
+}
+
+function unidadeDoEstudio(est) {
+  if (["A", "B", "C", "D", "AB"].includes(est)) return "aclimacao";
+  if (["1", "2", "3"].includes(est)) return "belavista";
+  return null;
+}
+
+function duracaoMinimaMin(unidade, dataISO) {
+  return ehFdsOuFeriado(dataISO) && ALUGUEL_MIN_FDS_FERIADO[unidade] ? ALUGUEL_MIN_FDS_FERIADO[unidade] : ALUGUEL_MIN_MINUTOS;
+}
+
+function formatarDuracao(min) {
+  return `${Math.floor(min / 60)}h${min % 60 ? String(min % 60).padStart(2, "0") : ""}`;
+}
 
 function ehBloqueio(ev) {
   return /BLOQ|FECHAD|MANUTEN/i.test(ev.summary || "");
 }
 
 // regra pura (sem chamar a agenda): eventos = eventos do mesmo calendário perto do horário.
+// ignorarId: evento que não conta (ex.: o "pré" do próprio pedido, ao virar pago).
 // devolve { status: 'ok' | 'apertado' | 'recusa', motivo, ev, intervalo }
-function classificarRegrasAluguel(estudio, inicio, fim, eventos) {
+function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = null) {
   const dur = Math.round((fim - inicio) / 60000);
-  if (dur < ALUGUEL_MIN_MINUTOS) return { status: "recusa", motivo: "duracao", duracao: dur };
+  const minimo = duracaoMinimaMin(unidadeDoEstudio(estudio), dataISOemSP(inicio));
+  if (dur < minimo) return { status: "recusa", motivo: "duracao", duracao: dur, minimo };
   const conflitantes = estudiosConflitantes(estudio);
   let apertado = null;
   for (const ev of (eventos || [])) {
     if (ev.status === "cancelled") continue;
+    if (ignorarId && ev.id === ignorarId) continue;
     if (!conflitantes.includes(extrairEstudio(ev))) continue;
     const ei = new Date(ev.start.dateTime || ev.start.date);
     const ef = new Date(ev.end.dateTime || ev.end.date);
@@ -985,7 +1023,7 @@ function classificarRegrasAluguel(estudio, inicio, fim, eventos) {
   return apertado || { status: "ok" };
 }
 
-async function checarRegrasAluguel(calId, estudio, inicio, fim) {
+async function checarRegrasAluguel(calId, estudio, inicio, fim, ignorarId = null) {
   const folga = INTERVALO_NORMAL_MIN * 60000;
   const res = await calendar.events.list({
     calendarId: calId,
@@ -994,7 +1032,7 @@ async function checarRegrasAluguel(calId, estudio, inicio, fim) {
     singleEvents: true,
     orderBy: "startTime",
   });
-  return classificarRegrasAluguel(estudio, inicio, fim, res.data.items || []);
+  return classificarRegrasAluguel(estudio, inicio, fim, res.data.items || [], ignorarId);
 }
 
 function descreverEventoCurto(ev) {
@@ -1038,9 +1076,19 @@ function interpretarMensagemSite(texto, hojeISO) {
   }
   let horario = null;
   if (mHora) horario = validarHorario(`${mHora[1]}:${mHora[2]}-${mHora[3]}:${mHora[4]}`);
-  // o que vier depois de "Está disponível?" pode ser nome/telefone do cliente
+  // o que vier depois de "Está disponível?" (formato antigo) ou depois do horário (formato novo:
+  // "Seremos 3 pessoas. Quero reservar. Meu nome é Maria.") pode ser nome/telefone do cliente
   const mFim = t.match(/est[áa] dispon[íi]vel\?/i);
-  const resto = mFim ? t.slice(mFim.index + mFim[0].length).trim() : "";
+  let resto = "";
+  if (mFim) resto = t.slice(mFim.index + mFim[0].length);
+  else if (mHora) {
+    resto = depois.slice(mHora.index + mHora[0].length).replace(/^\s*(\([^)]*\))?\s*\.?/, "")
+      .replace(/seremos\s+[^.]*?pessoas?\.?/i, " ")
+      .replace(/quero reservar\.?/i, " ")
+      .replace(/s[óo] estou consultando\.?/i, " ")
+      .replace(/meu nome [ée]\s*/i, " ");
+  }
+  resto = resto.replace(/\s+/g, " ").trim();
   return { datas, horario, estudio, unidadeErrada, resto };
 }
 
@@ -1166,11 +1214,19 @@ async function avancarAgendamentoRapido(chatId, conversa) {
 const COR_POR_ESTUDIO = { C: "1", D: "4", "2": "2", "3": "7" };
 
 async function criarEvento(dados) {
+  return (await criarEventoComId(dados)).titulo;
+}
+
+// dados.obs: linha extra na descrição; dados.antecipadoPago: "R$ 66,67" → reserva paga ("antecipado R$ 66,67 pago")
+async function criarEventoComId(dados) {
   const hTitulo = (h, m) => (m ? `${h}:${String(m).padStart(2, "0")}` : `${h}`);
-  const titulo = `${hTitulo(dados.h1, dados.m1)}-${hTitulo(dados.h2, dados.m2)}/${dados.estudio}${dados.pago ? "" : " pré"}`;
+  const pago = dados.pago || dados.antecipadoPago;
+  const titulo = `${hTitulo(dados.h1, dados.m1)}-${hTitulo(dados.h2, dados.m2)}/${dados.estudio}${pago ? "" : " pré"}`;
   let descricao = dados.nome;
   if (dados.telefone) descricao += ` ${dados.telefone}`;
+  if (dados.obs) descricao += `\n${dados.obs}`;
   if (dados.pago) descricao += `\npago R$${dados.pago}`;
+  if (dados.antecipadoPago) descricao += `\nantecipado ${dados.antecipadoPago} pago`;
   if (dados.naoCobrar) descricao += ` zm`; // marca de não-cobrar
   if (dados.confirmarPresenca) descricao += ` zm2`; // marca de confirmar presença (não cobra sinal)
   const eventBody = {
@@ -1181,8 +1237,8 @@ async function criarEvento(dados) {
   };
   const cor = COR_POR_ESTUDIO[dados.estudio];
   if (cor) eventBody.colorId = cor;
-  await calendar.events.insert({ calendarId: dados.calId, requestBody: eventBody });
-  return titulo;
+  const criado = await calendar.events.insert({ calendarId: dados.calId, requestBody: eventBody });
+  return { titulo, id: criado?.data?.id || null };
 }
 
 // confere as regras de aluguel de todas as reservas e, se estiver tudo certo, cria os eventos.
@@ -1206,7 +1262,7 @@ async function concluirAgendamento(chatId, conversa) {
     const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
     if (regra.status === "recusa") {
       let motivo;
-      if (regra.motivo === "duracao") motivo = `A duração mínima é de 2 horas (este pedido tem ${Math.floor(regra.duracao / 60)}h${regra.duracao % 60 ? String(regra.duracao % 60).padStart(2, "0") : ""}).`;
+      if (regra.motivo === "duracao") motivo = `A duração mínima em ${dataFmt} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(regra.duracao)}).\nMínimo: 2h de segunda a sexta; sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista.`;
       else if (regra.motivo === "conflito") motivo = `O estúdio ${r.estudio} já está ocupado em ${dataFmt}.\nJá existe: ${descreverEventoCurto(regra.ev)}.`;
       else motivo = `Intervalo de só ${regra.intervalo} min com outro aluguel (mínimo 15, o normal é 30).\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
       await sendMessage(chatId, `❌ ${motivo}\n\nNenhuma reserva foi criada. Refaça com outro horário.`);
@@ -2021,6 +2077,11 @@ async function consultarAgenda(argsTexto, destino) {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   try {
+    // toque nos botões do aviso de pedido do site
+    if (req.body.callback_query) {
+      await tratarBotaoPedido(req.body.callback_query);
+      return;
+    }
     const message = req.body.message;
     if (!message || !message.chat || typeof message.text !== "string") return;
 
@@ -2589,6 +2650,7 @@ app.get("/disponibilidade", async (req, res) => {
       inicio: inicioISO,
       dias,
       horario: { abre: 9, fecha: 21 },
+      feriados: FERIADOS,
       ocupado: await siteMontarDisponibilidade(inicioISO, dias),
     };
     siteCache.set(chave, { em: Date.now(), dados });
@@ -2601,6 +2663,386 @@ app.get("/disponibilidade", async (req, res) => {
   }
 });
 // ===================== fim do bloco da agenda do site =====================
+
+// =====================================================================
+// PEDIDO PELO SITE — POST /pedido → aviso no Telegram com botões
+// O formulário da agenda manda o pedido; o bot confere a agenda e avisa a
+// equipe (CHAT_MATINAL) com botões. Regras fixas:
+//   • nunca manda mensagem ao cliente (só entrega links wa.me prontos);
+//   • nunca cancela nada;
+//   • nada entra no Google Agenda sem um toque da equipe.
+// Os pedidos ficam em memória (7 dias); se o bot reiniciar, somem.
+// =====================================================================
+import { randomBytes } from "crypto";
+
+// valor POR HORA, por faixa de pessoas: [1–2, 3–5, 6–8]. total = valor/hora × horas.
+// "fds" vale para sábado, domingo e feriado.
+const PRECOS_SITE = {
+  aclimacao: {
+    semana: { A: [70, 80, 100], B: [70, 80, 100], AB: [100, 110, 130], C: [70, 80, 100], D: [70, 80, 100] },
+    fds:    { A: [80, 90, 110], B: [80, 90, 110], AB: [110, 120, 140], C: [80, 90, 110], D: [80, 90, 100] },
+  },
+  belavista: {
+    semana: { "1": [70, 80, 100], "2": [60, 70, 90], "3": [70, 80, 100] },
+    fds:    { "1": [80, 90, 110], "2": [70, 80, 100], "3": [80, 80, 100] },
+  },
+};
+const FAIXAS_PESSOAS = [[1, 2], [3, 5], [6, 8]]; // 9 = "9 ou mais": combinar valor
+const PIX_TEXTO = "Chave Pix (CNPJ): 43.345.289/0001-93\nou e-mail: zmphoto@zmphoto.com.br\nFavorecido: Zemaria Produções Fotográficas LTDA";
+const UNIDADES_PEDIDO = {
+  aclimacao: { nome: "Aclimação", endereco: "Rua Gualaxo, 206", agenda: 0 },
+  belavista: { nome: "Bela Vista", endereco: "Rua Santa Madalena, 46", agenda: 1 },
+};
+const PEDIDO_VALIDADE_MS = 7 * 24 * 3600 * 1000;
+const PEDIDO_SEGURAR_MS = 6 * 3600 * 1000;
+const PEDIDO_LIMITE_IP = { max: 5, janela: 10 * 60 * 1000 };
+const PEDIDO_LIMITE_TEL = { max: 3, janela: 24 * 3600 * 1000 };
+const DIAS_SEMANA = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+
+const pedidosSite = new Map();     // id → pedido
+const pedidosPorIp = new Map();    // ip → [horários]
+const pedidosPorTel = new Map();   // telefone → [horários]
+
+async function telegram(metodo, corpo) {
+  try {
+    const r = await fetch(`${TELEGRAM_API}/${metodo}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
+    });
+    const d = await r.json();
+    if (!d.ok) console.error(`Telegram ${metodo}:`, d.description);
+    return d;
+  } catch (e) {
+    console.error(`Telegram ${metodo}:`, e.message);
+    return { ok: false };
+  }
+}
+
+function passouDoLimite(mapa, chave, { max, janela }) {
+  const agora = Date.now();
+  const lista = (mapa.get(chave) || []).filter(t => agora - t < janela);
+  const passou = lista.length >= max;
+  if (!passou) lista.push(agora);
+  mapa.set(chave, lista);
+  return passou;
+}
+
+function somarDiasISO(dataISO, n) {
+  return new Date(new Date(`${dataISO}T12:00:00-03:00`).getTime() + n * 86400000).toISOString().slice(0, 10);
+}
+
+function minutosDeHHMM(s) {
+  const m = /^(\d{2}):(\d{2})$/.exec(typeof s === "string" ? s : "");
+  if (!m) return null;
+  const h = +m[1], min = +m[2];
+  if (h > 23 || (min !== 0 && min !== 30)) return null;
+  return h * 60 + min;
+}
+
+// devolve o pedido limpo, ou null se algo não bater
+function validarPedidoSite(b, hojeISO) {
+  if (!b || typeof b !== "object" || Array.isArray(b)) return null;
+  const { estudio, unidade, data, inicio, fim, duracaoMin, nome, telefone, pessoas, querReservar } = b;
+  if (typeof unidade !== "string" || !Object.hasOwn(UNIDADES_PEDIDO, unidade)) return null;
+  if (typeof estudio !== "string" || !SITE_ESTUDIOS[unidade].includes(estudio)) return null;
+  if (typeof data !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(data)) return null;
+  const dt = new Date(`${data}T12:00:00-03:00`);
+  if (isNaN(dt) || dt.toISOString().slice(0, 10) !== data) return null; // data que existe
+  if (data < hojeISO || data > somarDiasISO(hojeISO, 62)) return null;
+  const a = minutosDeHHMM(inicio), z = minutosDeHHMM(fim);
+  if (a === null || z === null || a < 9 * 60 || z > 21 * 60) return null;
+  if (!Number.isInteger(duracaoMin) || duracaoMin % 30 !== 0 || duracaoMin !== z - a) return null;
+  if (duracaoMin < duracaoMinimaMin(unidade, data)) return null;
+  if (typeof nome !== "string") return null;
+  const nomeLimpo = nome.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (nomeLimpo.length < 2 || nomeLimpo.length > 60) return null;
+  if (typeof telefone !== "string" || !/^\d{10,13}$/.test(telefone)) return null;
+  if (!Number.isInteger(pessoas) || pessoas < 1 || pessoas > 9) return null;
+  if (typeof querReservar !== "boolean") return null;
+  return { estudio, unidade, data, inicio, fim, duracaoMin, nome: nomeLimpo, telefone, pessoas, querReservar };
+}
+
+// telefone para wa.me e para a descrição do evento (com 55)
+function telefoneInternacional(tel) {
+  return tel.length <= 11 ? "55" + tel : tel;
+}
+
+// "5511999998888" → "11 99999-8888"
+function telefoneLegivel(tel) {
+  const n = tel.length >= 12 && tel.startsWith("55") ? tel.slice(2) : tel;
+  if (n.length === 11) return `${n.slice(0, 2)} ${n.slice(2, 7)}-${n.slice(7)}`;
+  if (n.length === 10) return `${n.slice(0, 2)} ${n.slice(2, 6)}-${n.slice(6)}`;
+  return tel;
+}
+
+function reais(v) {
+  return "R$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// null quando passa de 8 pessoas (combinar valor)
+function calcularValorPedido(p) {
+  const i = FAIXAS_PESSOAS.findIndex(([de, ate]) => p.pessoas >= de && p.pessoas <= ate);
+  if (i < 0) return null;
+  const porHora = PRECOS_SITE[p.unidade][ehFdsOuFeriado(p.data) ? "fds" : "semana"][p.estudio][i];
+  const total = Math.round(porHora * p.duracaoMin / 60 * 100) / 100;
+  const antecipado = Math.round(total / 3 * 100) / 100;
+  const restante = Math.round((total - antecipado) * 100) / 100;
+  return { porHora, faixa: FAIXAS_PESSOAS[i], limite: FAIXAS_PESSOAS[i][1], total, antecipado, restante };
+}
+
+function diaDoPedido(p) {
+  const d = new Date(`${p.data}T12:00:00-03:00`);
+  return `${DIAS_SEMANA[d.getUTCDay()]}, ${p.data.slice(8, 10)}/${p.data.slice(5, 7)}`;
+}
+
+function tipoDeDia(dataISO) {
+  if (FERIADOS.includes(dataISO)) return "feriado";
+  return ehFdsOuFeriado(dataISO) ? "fim de semana" : "dia útil";
+}
+
+function primeiroNome(nome) {
+  return (nome || "").split(" ")[0];
+}
+
+async function conferirPedido(p) {
+  try {
+    return await checarRegrasAluguel(p.calId, p.estudio, p.ini, p.fimData, p.segurado?.eventoId || null);
+  } catch (e) {
+    console.error("Erro ao conferir pedido do site:", e.message);
+    return { status: "erro", erro: e.message };
+  }
+}
+
+function linhaDaRegra(regra) {
+  if (regra.status === "ok") return "✅ Horário livre (com 30 min de intervalo)";
+  if (regra.status === "erro") return `⚠️ Não consegui conferir a agenda agora (${regra.erro}).`;
+  if (regra.motivo === "duracao") return `⚠️ Abaixo do mínimo do dia (${formatarDuracao(regra.minimo)})`;
+  if (regra.motivo === "conflito") return `⚠️ Conflito: já existe ${descreverEventoCurto(regra.ev)}`;
+  if (regra.motivo === "intervalo") return `⚠️ Conflito: intervalo de só ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)}`;
+  return `⚠️ Conflito: intervalo de ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)} (o normal é 30; 15 min só com ok15 pelo !agendar)`;
+}
+
+function montarAvisoPedido(p) {
+  const un = UNIDADES_PEDIDO[p.unidade];
+  const v = calcularValorPedido(p);
+  const linhas = [
+    "📩 Pedido pelo site",
+    `📸 Estúdio ${p.estudio} · ${un.nome}`,
+    `📅 ${diaDoPedido(p)} · ${p.inicio}–${p.fim} (${formatarDuracao(p.duracaoMin)}) · ${tipoDeDia(p.data)}`,
+    `👤 ${p.nome} · 📞 ${telefoneLegivel(p.telefone)}`,
+    v ? `👥 ${p.pessoas} ${p.pessoas === 1 ? "pessoa" : "pessoas"} (faixa ${v.faixa[0]}–${v.faixa[1]})` : "👥 9 ou mais pessoas · ⚠️ mais de 8 pessoas: combinar valor",
+    p.querReservar ? "🔖 Quer reservar" : "❔ Só consultando",
+  ];
+  if (v) linhas.push(`💰 R$ ${v.porHora}/h × ${formatarDuracao(p.duracaoMin)} = ${reais(v.total)} · antecipado ${reais(v.antecipado)} · restante no dia ${reais(v.restante)}`);
+  linhas.push(linhaDaRegra(p.regraInicial));
+  return linhas.join("\n");
+}
+
+function montarTextoDisponibilidade(p) {
+  const un = UNIDADES_PEDIDO[p.unidade];
+  const v = calcularValorPedido(p);
+  const topo = `Olá, ${primeiroNome(p.nome)}! Temos disponível:\n\n` +
+    `📸 Estúdio ${p.estudio} – ${un.nome} (${un.endereco})\n` +
+    `📅 ${diaDoPedido(p)}, das ${p.inicio} às ${p.fim} (${formatarDuracao(p.duracaoMin)})\n\n`;
+  if (!v) {
+    return topo + "Como serão mais de 8 pessoas, o valor é combinado à parte — já te passamos por aqui.\n" +
+      "Para fazer a reserva, pedimos 1/3 antecipado via Pix:\n" + PIX_TEXTO + "\n\n" +
+      "A reserva só é feita após o envio do comprovante, ok? 😊";
+  }
+  return topo +
+    `O valor para até ${v.limite} pessoas fica ${reais(v.total)}.\n` +
+    `Para fazer a reserva, pedimos 1/3 antecipado: ${reais(v.antecipado)} via Pix:\n` + PIX_TEXTO + "\n\n" +
+    "A reserva só é feita após o envio do comprovante, ok? 😊";
+}
+
+function montarTextoConfirmacao(p) {
+  const un = UNIDADES_PEDIDO[p.unidade];
+  const v = calcularValorPedido(p);
+  return `Comprovante recebido, ${primeiroNome(p.nome)}! ✅ Reserva feita:\n` +
+    `📸 Estúdio ${p.estudio} – ${un.nome} (${un.endereco})\n` +
+    `📅 ${diaDoPedido(p)}, das ${p.inicio} às ${p.fim}\n` +
+    (v ? `O restante (${reais(v.restante)}) é pago no dia. Até lá!` : "O restante é pago no dia. Até lá!");
+}
+
+function tecladoPedido(id, p) {
+  const b = (texto, acao) => ({ text: texto, callback_data: `pd:${acao}:${id}` });
+  if (p.ignorado) return [[b("❌ Ignorado", "x")]];
+  if (p.reservado) return [[b(`✅ Reservado (pago) · ${p.reservado.titulo}`, "x")]];
+  return [
+    [b(p.enviado ? "📲 Disponibilidade enviada ✓" : "📲 Enviar disponibilidade e valor", "env"), b("🧾 Comprovante recebido → reservar", "pag")],
+    p.segurado
+      ? [b("⏸ Segurado como pré ✓", "x")]
+      : [b("⏸ Segurar horário (opcional)", "seg"), b("❌ Ignorar", "ign")],
+  ];
+}
+
+async function atualizarBotoesPedido(id, p) {
+  if (!p.messageId) return;
+  await telegram("editMessageReplyMarkup", {
+    chat_id: p.chatId, message_id: p.messageId,
+    reply_markup: { inline_keyboard: tecladoPedido(id, p) },
+  });
+}
+
+function dadosDoEvento(p) {
+  const [h1, m1] = p.inicio.split(":").map(Number);
+  const [h2, m2] = p.fim.split(":").map(Number);
+  return {
+    h1, m1, h2, m2, estudio: p.estudio, calId: p.calId, inicio: p.ini, fim: p.fimData,
+    nome: p.nome, telefone: telefoneInternacional(p.telefone),
+    obs: `${p.pessoas === 9 ? "9 ou mais" : p.pessoas} ${p.pessoas === 1 ? "pessoa" : "pessoas"} · pedido pelo site`,
+  };
+}
+
+app.post("/pedido", async (req, res) => {
+  // IP real do visitante: a borda da Railway sobrescreve X-Real-IP e X-Forwarded-For (o cliente não
+  // consegue forjar). O fim do X-Forwarded-For pode ser um salto interno da Railway, igual para todos.
+  const ip = String(req.headers["x-real-ip"] || "").trim()
+    || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
+    || req.socket.remoteAddress || "?";
+  if (passouDoLimite(pedidosPorIp, ip, PEDIDO_LIMITE_IP)) return res.status(429).json({ ok: false });
+  const hoje = dataISOemSP(new Date());
+  const pedido = validarPedidoSite(req.body, hoje);
+  if (!pedido) return res.status(400).json({ ok: false });
+  if (passouDoLimite(pedidosPorTel, telefoneInternacional(pedido.telefone), PEDIDO_LIMITE_TEL)) return res.status(429).json({ ok: false });
+  res.json({ ok: true });
+
+  try {
+    const id = randomBytes(5).toString("hex");
+    const p = {
+      ...pedido,
+      criado: Date.now(),
+      chatId: CHAT_MATINAL,
+      calId: CALENDAR_IDS[UNIDADES_PEDIDO[pedido.unidade].agenda],
+      ini: new Date(`${pedido.data}T${pedido.inicio}:00-03:00`),
+      fimData: new Date(`${pedido.data}T${pedido.fim}:00-03:00`),
+    };
+    p.regraInicial = await conferirPedido(p);
+    pedidosSite.set(id, p);
+    const r = await telegram("sendMessage", {
+      chat_id: p.chatId,
+      text: montarAvisoPedido(p),
+      reply_markup: { inline_keyboard: tecladoPedido(id, p) },
+    });
+    p.messageId = r?.result?.message_id || null;
+  } catch (e) {
+    console.error("Erro ao avisar pedido do site:", e.message);
+  }
+});
+
+// JSON inválido ou grande demais no /pedido → 400, sem avisar ninguém
+app.use("/pedido", (err, req, res, next) => {
+  res.status(400).json({ ok: false });
+});
+
+async function tratarBotaoPedido(cq) {
+  const responder = (text, show_alert = false) => telegram("answerCallbackQuery", { callback_query_id: cq.id, text, show_alert });
+  const [prefixo, acao, id] = String(cq.data || "").split(":");
+  if (prefixo !== "pd") return responder();
+  const chatId = String(cq.message?.chat?.id || "");
+  if (!podeAgendar(cq.from?.id) && !podeAgendar(chatId)) return responder("Só a equipe autorizada pode usar estes botões.", true);
+
+  const p = pedidosSite.get(id);
+  if (!p || Date.now() - p.criado > PEDIDO_VALIDADE_MS) {
+    pedidosSite.delete(id);
+    await responder("Esse pedido expirou.");
+    await sendMessage(chatId, "Esse pedido expirou. Use !agendar com os dados.", true);
+    return;
+  }
+  if (acao === "x") return responder("Já feito ✓");
+  if (p.ignorado) return responder("Esse pedido foi ignorado.");
+  if (p.reservado) return responder("Esse pedido já virou reserva ✓");
+  if (p.ocupado) return responder("Um instante, ainda estou cuidando do toque anterior…");
+  p.ocupado = true;
+  try {
+    const resumo = `Estúdio ${p.estudio} · ${UNIDADES_PEDIDO[p.unidade].nome} · ${diaDoPedido(p)} · ${p.inicio}–${p.fim} · ${p.nome}`;
+
+    if (acao === "ign") {
+      if (p.segurado) return await responder("Esse horário já está seguro como pré. Para desistir, apague o evento na agenda.", true);
+      p.ignorado = true;
+      await atualizarBotoesPedido(id, p);
+      await responder("Pedido ignorado. Nada foi criado.");
+      return;
+    }
+
+    if (acao === "pag" && !p.enviado) return await responder("Primeiro toque em 📲 Enviar disponibilidade e valor.", true);
+    if (acao === "seg" && p.segurado) return await responder("Já está seguro como pré ✓");
+    if (!["env", "pag", "seg"].includes(acao)) return await responder();
+
+    // confere de novo a agenda antes de qualquer coisa (o pré do próprio pedido não conta)
+    const regra = await conferirPedido(p);
+    if (regra.status !== "ok") {
+      await responder("Não dá: veja o aviso no chat.", false);
+      await sendMessage(chatId, `${linhaDaRegra(regra)}\n${resumo}\nNada foi ${acao === "env" ? "enviado" : "criado"}.`, true);
+      return;
+    }
+
+    if (acao === "env") {
+      await responder("Mensagem pronta 👇");
+      await sendMessage(chatId, `📲 Disponibilidade e valor para ${p.nome} (${telefoneLegivel(p.telefone)}):`, true);
+      await enviarTextoELink(chatId, montarTextoDisponibilidade(p), telefoneInternacional(p.telefone));
+      p.enviado = true;
+      await atualizarBotoesPedido(id, p);
+      return;
+    }
+
+    if (acao === "seg") {
+      const { titulo, id: eventoId } = await criarEventoComId(dadosDoEvento(p));
+      p.segurado = { eventoId, titulo, em: Date.now(), lembrado: false };
+      await responder("Horário seguro ✓");
+      await sendMessage(chatId, `⏸ ${titulo} · ${p.nome}\nHorário seguro como pré por 6h. Se não vier o comprovante, aviso vocês (não cancelo sozinho).`, true);
+      await atualizarBotoesPedido(id, p);
+      return;
+    }
+
+    // acao === "pag": comprovante recebido → reserva paga
+    const v = calcularValorPedido(p);
+    const antecipado = v ? reais(v.antecipado) : "(valor combinado)";
+    let titulo = null;
+    if (p.segurado) {
+      // já existe o "pré" deste pedido: vira pago (se ainda estiver na agenda)
+      let ev = null;
+      try { ev = (await calendar.events.get({ calendarId: p.calId, eventId: p.segurado.eventoId })).data; } catch (e) { ev = null; }
+      if (ev && ev.status !== "cancelled") {
+        titulo = (ev.summary || p.segurado.titulo).replace(/\s+pr[eé](?=\s|$)/i, "").trim();
+        await calendar.events.patch({
+          calendarId: p.calId, eventId: ev.id,
+          requestBody: { summary: titulo, description: `${ev.description || ""}\nantecipado ${antecipado} pago` },
+        });
+      }
+    }
+    if (!titulo) titulo = (await criarEventoComId({ ...dadosDoEvento(p), antecipadoPago: antecipado })).titulo;
+    p.reservado = { titulo };
+    await responder("Reserva criada ✓");
+    await sendMessage(chatId, `🧾 Reserva paga na agenda: ${titulo} · ${p.nome} · antecipado ${antecipado} pago\n👇 Confirmação para o cliente:`, true);
+    await enviarTextoELink(chatId, montarTextoConfirmacao(p), telefoneInternacional(p.telefone));
+    await atualizarBotoesPedido(id, p);
+  } catch (e) {
+    console.error("Erro no botão do pedido:", e.message);
+    await responder("Deu erro, veja o chat.");
+    await sendMessage(chatId, `❌ Erro: ${e.message}`, true);
+  } finally {
+    p.ocupado = false;
+  }
+}
+
+// a cada 10 min: lembrete de "pré" segurado há 6h sem comprovante (nunca cancela) + limpeza da memória
+setInterval(async () => {
+  const agora = Date.now();
+  for (const [id, p] of pedidosSite) {
+    if (agora - p.criado > PEDIDO_VALIDADE_MS) { pedidosSite.delete(id); continue; }
+    if (p.segurado && !p.reservado && !p.segurado.lembrado && agora - p.segurado.em >= PEDIDO_SEGURAR_MS) {
+      p.segurado.lembrado = true;
+      await sendMessage(p.chatId,
+        `⏰ Pedido do site seguro há 6h e ainda sem comprovante:\n📌 ${p.segurado.titulo} · ${diaDoPedido(p)}\n👤 ${p.nome} · 📞 ${telefoneLegivel(p.telefone)}\n\nO evento continua como pré na agenda. Não cancelei nada — vocês decidem.`, true);
+    }
+  }
+  for (const mapa of [pedidosPorIp, pedidosPorTel]) {
+    for (const [k, lista] of mapa) if (!lista.some(t => agora - t < PEDIDO_LIMITE_TEL.janela)) mapa.delete(k);
+  }
+}, 10 * 60 * 1000);
+// ===================== fim do pedido pelo site =====================
 
 // =====================================================================
 // CONFERÊNCIA DA AGENDA — SÓ AVISA A EQUIPE NO TELEGRAM

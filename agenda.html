@@ -97,6 +97,22 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--sel);outline-offset
 .pop-r span{font-weight:700;font-size:17px;font-variant-numeric:tabular-nums}
 .pop-wa{display:flex;align-items:center;justify-content:center;min-height:46px;border-radius:12px;background:#1F8F4E;color:#fff;font-weight:700;font-size:15px;text-decoration:none}
 .pop-wa:hover{background:#18763F}
+button.pop-wa,button.wa{border:0;width:100%;cursor:pointer;font:inherit;font-weight:700}
+button.wa{width:auto}
+#zm-form .fm-bg{position:fixed;inset:0;background:rgba(22,24,29,.45);z-index:60}
+#zm-form .fm{position:fixed;z-index:61;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,calc(100% - 24px));max-height:calc(100% - 24px);overflow:auto;background:#fff;border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.3);padding:18px;display:flex;flex-direction:column;gap:12px}
+#zm-form h2{margin:0;font-family:var(--f-display);font-size:20px;font-weight:600}
+#zm-form .fm-res{background:var(--sel-soft);border:1px solid #C9D3FF;border-radius:12px;padding:10px 12px;font-size:13px;color:var(--muted)}
+#zm-form .fm-res b{display:block;color:var(--ink);font-size:16px;margin-top:2px}
+#zm-form .fm-f{display:flex;flex-direction:column;gap:4px;font-size:13.5px;font-weight:600}
+#zm-form .fm-f input,#zm-form .fm-f select{height:46px;border:1px solid #D5D9DF;border-radius:10px;padding:0 12px;font:inherit;font-weight:400;font-size:16px;background:#fff;width:100%}
+#zm-form .fm-chk{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;cursor:pointer;font-size:14px}
+#zm-form .fm-chk input{width:20px;height:20px;margin-top:1px;accent-color:var(--sel);flex:0 0 auto}
+#zm-form .fm-chk small{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
+#zm-form .fm-err{margin:0;color:#B3261E;font-size:13.5px;font-weight:600}
+#zm-form .fm-note{margin:0;color:var(--muted);font-size:12.5px;text-align:center}
+#zm-form .pop-x{position:absolute;top:8px;right:8px}
+@media (max-width:600px){#zm-form .fm{top:auto;bottom:0;left:0;transform:none;width:100%;border-radius:16px 16px 0 0;padding-bottom:calc(18px + env(safe-area-inset-bottom,0px))}}
 .iv{position:absolute;left:3px;right:3px;z-index:1;pointer-events:none;background:repeating-linear-gradient(135deg,rgba(150,156,166,.16) 0 4px,transparent 4px 8px)}
 .wa{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:12px;background:#fff;color:var(--ink);font-weight:700;text-decoration:none}
 .x{min-height:44px;padding:0 10px;border:0;background:transparent;color:#C9CDD3;font-weight:600}
@@ -233,7 +249,7 @@ html,body{max-width:100%;overflow-x:hidden}
   function carregar() {
     fetch(API + '?inicio=' + HOJE + '&dias=61', { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
-      .then(function (d) { DATA = converter(d.ocupado); CARREGADO = true; ERRO = false; render(); })
+      .then(function (d) { if (d.feriados && d.feriados.length) d.feriados.forEach(function (f) { if (FERIADOS.indexOf(f) < 0) FERIADOS.push(f); }); DATA = converter(d.ocupado); CARREGADO = true; ERRO = false; render(); })
       .catch(function () { ERRO = true; if (!CARREGADO) render(); });
   }
   function busy(k, u, e) { return (DATA[k] && DATA[k][u][e]) || []; }
@@ -241,8 +257,13 @@ html,body{max-width:100%;overflow-x:hidden}
   /* ---------- estado ---------- */
   var MAXD = addDays(HOJE, 60);
   var st = { view: 'geral', wk: 0, mo: 0, unit: 'aclimacao', day: HOJE, sel: null, dur: 120 };
-  // regras: mínimo de 2h, de meia em meia hora, até 8h; 30 min de intervalo entre aluguéis
-  var MINM = 120, MAXM = 480, PASSO = 30, INTERVALO = 30;
+  // regras: de meia em meia hora, até 8h; 30 min de intervalo entre aluguéis
+  // mínimo: 2h de segunda a sexta; sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista
+  var MAXM = 480, PASSO = 30, INTERVALO = 30;
+  var FERIADOS = ['2026-01-01','2026-01-25','2026-02-16','2026-02-17','2026-04-03','2026-04-21','2026-05-01','2026-06-04','2026-07-09','2026-09-07','2026-10-12','2026-11-02','2026-11-15','2026-11-20','2026-12-25',
+    '2027-01-01','2027-01-25','2027-02-08','2027-02-09','2027-03-26','2027-04-21','2027-05-01','2027-05-27','2027-07-09','2027-09-07','2027-10-12','2027-11-02','2027-11-15','2027-11-20','2027-12-25'];
+  function fdsOuFeriado(k) { var dw = fromKey(k).getDay(); return dw === 0 || dw === 6 || FERIADOS.indexOf(k) >= 0; }
+  function minDur(k, u) { return fdsOuFeriado(k) ? (u === 'belavista' ? 240 : 180) : 120; }
   function fmtDur(m) { var h = Math.floor(m / 60), r = m % 60; return h + 'h' + (r ? pad(r) : ''); }
   var LANES = [['aclimacao', 'A'], ['aclimacao', 'B'], ['aclimacao', 'C'], ['aclimacao', 'D'], ['aclimacao', 'AB'], null, ['belavista', '1'], ['belavista', '2'], ['belavista', '3']];
   var app = document.getElementById('app');
@@ -258,9 +279,9 @@ html,body{max-width:100%;overflow-x:hidden}
     for (var i = 0; i < L.length; i++) { var folga = L[i].s === 'bloqueado' ? 0 : INTERVALO; if (L[i].a < b + folga && L[i].b > a - folga) return false; }
     return true;
   }
-  function durs(k, u, e, a) { var r = []; for (var d = MINM; d <= MAXM; d += PASSO) { if (livreEntre(k, u, e, a, a + d)) r.push(d); else break; } return r; }
+  function durs(k, u, e, a) { var r = []; for (var d = minDur(k, u); d <= MAXM; d += PASSO) { if (livreEntre(k, u, e, a, a + d)) r.push(d); else break; } return r; }
   // uma hora conta como livre só se fizer parte de um intervalo livre de pelo menos 2 horas
-  function horaUtil(k, u, e, hh) { var a = hh * 60; if (!livreEntre(k, u, e, a, a + 60)) return false; for (var t = a - MINM + 60; t <= a; t += PASSO) if (livreEntre(k, u, e, t, t + MINM)) return true; return false; }
+  function horaUtil(k, u, e, hh) { var a = hh * 60; if (!livreEntre(k, u, e, a, a + 60)) return false; var mn = minDur(k, u); for (var t = a - mn + 60; t <= a; t += PASSO) if (livreEntre(k, u, e, t, t + mn)) return true; return false; }
   function horasLivres(k, u) {
     var n = 0;
     UN[u].est.forEach(function (x) { for (var h = HI; h < HF; h++) if (horaUtil(k, u, x[0], h)) n++; });
@@ -268,9 +289,53 @@ html,body{max-width:100%;overflow-x:hidden}
   }
 
   function nomeEst(e) { return 'Estúdio ' + e; }
+  /* ---------- dados do cliente e pedido para a equipe (Telegram) ---------- */
+  var API_PEDIDO = '/pedido';
+  var cli = { nome: '', tel: '', pess: '2', quer: true };
+  try { var salvo = JSON.parse(localStorage.getItem('zm-cliente') || 'null'); if (salvo) { cli.nome = salvo.nome || ''; cli.tel = salvo.tel || ''; } } catch (e) {}
+  function salvarCli() { try { localStorage.setItem('zm-cliente', JSON.stringify({ nome: cli.nome, tel: cli.tel })); } catch (e) {} }
+  function pessTxt(p) { return p === '9' ? '9 ou mais pessoas' : p + (p === '1' ? ' pessoa' : ' pessoas'); }
+  function soDigitos(t) { return (t || '').replace(/\D/g, ''); }
+  function abrirForm() {
+    var s = st.sel; if (!s) return;
+    var box = document.getElementById('zm-form');
+    if (!box) { box = document.createElement('div'); box.id = 'zm-form'; document.body.appendChild(box); }
+    var op = ''; for (var i = 1; i <= 9; i++) op += '<option value="' + i + '"' + (String(i) === cli.pess ? ' selected' : '') + '>' + pessTxt(String(i)) + '</option>';
+    box.innerHTML = '<div class="fm-bg" data-f="fechar"></div><div class="fm" role="dialog" aria-modal="true" aria-labelledby="fm-t">' +
+      '<button type="button" class="pop-x" data-f="fechar" aria-label="Fechar">×</button>' +
+      '<h2 id="fm-t">Seu pedido</h2>' +
+      '<div class="fm-res">' + nomeEst(s.e) + ' · ' + UN[s.u].nome + '<b>' + cap(dLong(s.k)) + ' · ' + hm(s.a) + ' – ' + hm(s.a + s.d) + ' (' + fmtDur(s.d) + ')</b></div>' +
+      '<label class="fm-f" for="fm-nome">Seu nome<input id="fm-nome" type="text" autocomplete="name" value="' + cli.nome.replace(/"/g, '&quot;') + '"></label>' +
+      '<label class="fm-f" for="fm-tel">Seu WhatsApp (com DDD)<input id="fm-tel" type="tel" inputmode="tel" autocomplete="tel" placeholder="11 99999-8888" value="' + cli.tel.replace(/"/g, '&quot;') + '"></label>' +
+      '<label class="fm-f" for="fm-pess">Quantas pessoas vêm (incluindo você)?<select id="fm-pess">' + op + '</select></label>' +
+      '<label class="fm-chk" for="fm-quer"><input id="fm-quer" type="checkbox"' + (cli.quer ? ' checked' : '') + '><span><b>Quero reservar</b><small>Confirmamos a disponibilidade e enviamos o valor e o Pix de 1/3 antecipado. A reserva é feita após o envio do comprovante.</small></span></label>' +
+      '<p class="fm-err" id="fm-err" hidden></p>' +
+      '<a class="pop-wa" id="fm-enviar" href="' + waLink(s) + '" target="_blank" rel="noopener">Enviar pelo WhatsApp</a>' +
+      '<p class="fm-note">A mensagem abre no seu WhatsApp para você enviar. Respondemos com a disponibilidade e o valor.</p></div>';
+    var nome = box.querySelector('#fm-nome'), tel = box.querySelector('#fm-tel'), pess = box.querySelector('#fm-pess'), quer = box.querySelector('#fm-quer'), env = box.querySelector('#fm-enviar'), err = box.querySelector('#fm-err');
+    function atual() { cli.nome = nome.value.trim(); cli.tel = tel.value.trim(); cli.pess = pess.value; cli.quer = quer.checked; salvarCli(); env.href = waLink(s); err.hidden = true; }
+    [nome, tel, pess, quer].forEach(function (el) { el.addEventListener('input', atual); el.addEventListener('change', atual); });
+    function fechar() { box.innerHTML = ''; document.removeEventListener('keydown', tecla); }
+    function tecla(ev) { if (ev.key === 'Escape') fechar(); }
+    document.addEventListener('keydown', tecla);
+    box.addEventListener('click', function (ev) { if (ev.target.closest('[data-f="fechar"]')) fechar(); });
+    env.addEventListener('click', function (ev) {
+      atual();
+      var d = soDigitos(cli.tel);
+      if (cli.nome.length < 2 || d.length < 10) { ev.preventDefault(); err.textContent = cli.nome.length < 2 ? 'Escreva seu nome.' : 'Escreva seu WhatsApp com DDD.'; err.hidden = false; return; }
+      try {
+        fetch(API_PEDIDO, { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+          body: JSON.stringify({ estudio: s.e, unidade: s.u, data: s.k, inicio: hm(s.a), fim: hm(s.a + s.d), duracaoMin: s.d, nome: cli.nome, telefone: d, pessoas: +cli.pess, querReservar: cli.quer, origem: 'site' }) }).catch(function () {});
+      } catch (e) {}
+      setTimeout(function () { fechar(); toast('Pedido enviado! Agora é só mandar a mensagem no WhatsApp.'); }, 300);
+    });
+    setTimeout(function () { (cli.nome ? tel : nome).focus(); }, 50);
+  }
+
   function waLink(s) {
     var U = UN[s.u];
-    var txt = 'Olá! Gostaria de reservar o ' + nomeEst(s.e) + (s.e === 'AB' ? ' (A + B juntos)' : '') + ' na unidade ' + U.nome + ' (' + U.end + '), ' + dMsg(s.k) + ', das ' + hm(s.a) + ' às ' + hm(s.a + s.d) + ' (' + fmtDur(s.d) + '). Está disponível?';
+    var txt = 'Olá! Gostaria de reservar o ' + nomeEst(s.e) + (s.e === 'AB' ? ' (A + B juntos)' : '') + ' na unidade ' + U.nome + ' (' + U.end + '), ' + dMsg(s.k) + ', das ' + hm(s.a) + ' às ' + hm(s.a + s.d) + ' (' + fmtDur(s.d) + ').' +
+      '\nSeremos ' + pessTxt(cli.pess) + '.\n' + (cli.quer ? 'Quero reservar.' : 'Só estou consultando.') + (cli.nome ? '\nMeu nome é ' + cli.nome + '.' : '');
     return 'https://wa.me/' + WA + '?text=' + encodeURIComponent(txt);
   }
 
@@ -393,8 +458,8 @@ html,body{max-width:100%;overflow-x:hidden}
     var h = '';
     h += '<div class="top"><h1>Agenda de horários</h1><p>Veja a semana de todos os estúdios, toque no que você quer e escolha o horário.</p></div>';
     h += '<div class="ctrl"><div class="seg" role="group" aria-label="Visão"><button type="button" data-act="view" data-v="mes" aria-pressed="' + (st.view === 'mes') + '">Mês</button><button type="button" data-act="view" data-v="geral" aria-pressed="' + (st.view === 'geral') + '">Semana</button><button type="button" data-act="view" data-v="dia" aria-pressed="' + (st.view === 'dia') + '">Dia</button></div><div class="legend"><span><i class="sw l"></i>Livre</span><span><i class="sw c"></i>Ocupado (cor de cada estúdio)</span><span><i class="sw f"></i>Fechado</span><span><i class="sw s"></i>Sua escolha</span></div></div>';
-    if (st.view === 'mes') { h += mes(); h += '<div class="bar"><span class="hint">Toque em um dia para ver os horários livres de cada estúdio.</span></div><p class="foot">Reservas com até 2 meses de antecedência. Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora.</p>'; app.innerHTML = h; return; }
-    if (st.view === 'geral') { h += semana(); h += '<div class="bar"><span class="hint">Toque em um estúdio, em qualquer dia, para ver os horários de perto.</span></div><p class="foot">Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>'; app.innerHTML = h; return; }
+    if (st.view === 'mes') { h += mes(); h += '<div class="bar"><span class="hint">Toque em um dia para ver os horários livres de cada estúdio.</span></div><p class="foot">Reservas com até 2 meses de antecedência. Horários das 9h às 21h, mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista), de meia em meia hora.</p>'; app.innerHTML = h; return; }
+    if (st.view === 'geral') { h += semana(); h += '<div class="bar"><span class="hint">Toque em um estúdio, em qualquer dia, para ver os horários de perto.</span></div><p class="foot">Horários das 9h às 21h, mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista), de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>'; app.innerHTML = h; return; }
     h += '<div class="row2"><div class="seg" role="group" aria-label="Unidade">';
     ['aclimacao', 'belavista'].forEach(function (u) { h += '<button type="button" data-act="unit" data-v="' + u + '" aria-pressed="' + (st.unit === u) + '">' + UN[u].nome + '</button>'; });
     h += '</div></div>';
@@ -405,7 +470,7 @@ html,body{max-width:100%;overflow-x:hidden}
     }
     h += '</div>';
     var livres = horasLivres(k, st.unit);
-    h += '<div class="cal"><div class="calh"><div><b>' + cap(dLong(k)) + '</b> <span>· ' + U.nome + ', ' + U.end + '</span></div><em>' + (livres ? livres + ' horas livres' : 'Sem horários livres') + '</em></div>';
+    h += '<div class="cal"><div class="calh"><div><b>' + cap(dLong(k)) + '</b> <span>· ' + U.nome + ', ' + U.end + '</span></div><em>' + (livres ? livres + ' horas livres' : 'Sem horários livres') + (minDur(k, st.unit) > 120 ? ' · mínimo ' + fmtDur(minDur(k, st.unit)) + ' neste dia' : '') + '</em></div>';
     h += '<div class="gw"><div class="g" style="--cols:' + U.est.length + ';--hrs:' + hrs + '">';
     h += '<div class="gh"><div></div>';
     U.est.forEach(function (x) { h += '<div style="box-shadow:inset 0 3px 0 ' + COR[x[0]] + '"><small>Estúdio</small><b>' + x[0] + '</b>' + (x[1] ? '<i>' + x[1] + '</i>' : '') + '</div>'; });
@@ -448,7 +513,7 @@ html,body{max-width:100%;overflow-x:hidden}
       h += '<button type="button" class="pop-x" data-act="clear" aria-label="Limpar escolha">×</button>';
       h += '<div class="pop-t">' + nomeEst(sp.e) + ' · ' + UN[sp.u].nome + '</div><div class="pop-h">' + cap(dLong(sp.k)) + '<br><b>' + hm(sp.a) + ' – ' + hm(sp.a + sp.d) + '</b></div>';
       h += '<div class="pop-r"><button type="button" data-act="dur" data-v="-30" aria-label="Menos meia hora"' + (okp.indexOf(sp.d - PASSO) < 0 ? ' disabled' : '') + '>−</button><span>' + fmtDur(sp.d) + '</span><button type="button" data-act="dur" data-v="30" aria-label="Mais meia hora"' + (okp.indexOf(sp.d + PASSO) < 0 ? ' disabled' : '') + '>+</button></div>';
-      h += '<a class="pop-wa" href="' + waLink(sp) + '" target="_blank" rel="noopener">Reservar pelo WhatsApp</a></div>';
+      h += '<button type="button" class="pop-wa" data-act="form">Reservar pelo WhatsApp</button></div>';
     }
     h += '</div></div></div></div>';
     // barra (só aparece quando o horário escolhido não está na tela)
@@ -457,11 +522,11 @@ html,body{max-width:100%;overflow-x:hidden}
       var ok = durs(s2.k, s2.u, s2.e, s2.a);
       h += '<div class="bar"><div><small>' + nomeEst(s2.e) + ' · ' + UN[s2.u].nome + '</small><strong>' + dLong(s2.k).replace(/^./, function (c) { return c.toUpperCase(); }) + ', das ' + hm(s2.a) + ' às ' + hm(s2.a + s2.d) + ' (' + fmtDur(s2.d) + ')</strong></div><div class="acts"><div class="seg" role="group" aria-label="Duração">';
       h += '<button type="button" data-act="dur" data-v="-30" aria-label="Diminuir meia hora"' + (ok.indexOf(s2.d - PASSO) < 0 ? ' disabled' : '') + '>−</button><span class="dv">' + fmtDur(s2.d) + '</span><button type="button" data-act="dur" data-v="30" aria-label="Aumentar meia hora"' + (ok.indexOf(s2.d + PASSO) < 0 ? ' disabled' : '') + '>+</button>';
-      h += '</div><a class="wa" href="' + waLink(s2) + '" target="_blank" rel="noopener">Reservar pelo WhatsApp</a><button type="button" class="x" data-act="clear">Limpar</button></div></div>';
+      h += '</div><button type="button" class="wa" data-act="form">Reservar pelo WhatsApp</button><button type="button" class="x" data-act="clear">Limpar</button></div></div>';
     } else if (!s2) {
       h += '<div class="bar"><span class="hint">Toque num espaço branco da agenda para escolher o horário.</span></div>';
     }
-    h += '<p class="foot">Horários das 9h às 21h, mínimo de 2 horas, de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
+    h += '<p class="foot">Horários das 9h às 21h, mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista), de meia em meia hora. A reserva é confirmada pela nossa equipe no WhatsApp.</p>';
     app.innerHTML = h;
     var strip = app.querySelector('.days'), on = strip && strip.querySelector('[aria-pressed="true"]');
     if (on) strip.scrollLeft = on.offsetLeft - strip.offsetLeft - strip.clientWidth / 2 + on.clientWidth / 2;
@@ -479,7 +544,7 @@ html,body{max-width:100%;overflow-x:hidden}
     var r = col.getBoundingClientRect();
     var y = ev.clientY - r.top;
     var m = HI * 60 + Math.floor(y / HH * 2) * 30;
-    return Math.max(HI * 60, Math.min(HF * 60 - MINM, m));
+    return Math.max(HI * 60, Math.min(HF * 60 - minDur(st.day, st.unit), m));
   }
 
   app.addEventListener('click', function (ev) {
@@ -487,6 +552,7 @@ html,body{max-width:100%;overflow-x:hidden}
     if (b) {
       var a = b.getAttribute('data-act'), v = b.getAttribute('data-v');
       if (a === 'unit') { st.unit = v; st.sel = null; }
+      else if (a === 'form') { abrirForm(); return; }
       else if (a === 'view') { st.view = v; }
       else if (a === 'mo') { st.mo = Math.max(0, st.mo + (+v)); }
       else if (a === 'wk') { st.wk = Math.max(0, Math.min(8, st.wk + (+v))); }
@@ -501,8 +567,8 @@ html,body{max-width:100%;overflow-x:hidden}
     if (wr) {
       var br = wr.querySelector('.wm-bar').getBoundingClientRect();
       var mx = HI * 60 + Math.floor(Math.max(0, ev.clientX - br.left) / br.width * (HF - HI) * 2) * 30;
-      mx = Math.max(HI * 60, Math.min(HF * 60 - MINM, mx));
       st.view = 'dia'; st.day = wr.getAttribute('data-k'); st.unit = wr.getAttribute('data-u');
+      mx = Math.max(HI * 60, Math.min(HF * 60 - minDur(st.day, st.unit), mx));
       var e3 = wr.getAttribute('data-e'), ok3 = durs(st.day, st.unit, e3, mx);
       st.sel = ok3.length ? { k: st.day, u: st.unit, e: e3, a: mx, d: ok3.indexOf(st.dur) >= 0 ? st.dur : ok3[0] } : null;
       render(); mostrarEscolha();
@@ -512,8 +578,8 @@ html,body{max-width:100%;overflow-x:hidden}
     var ln = ev.target.closest('.ln');
     if (ln) {
       var r = ln.getBoundingClientRect(), mm = HI * 60 + Math.floor((ev.clientY - r.top) / 34 * 2) * 30;
-      mm = Math.max(HI * 60, Math.min(HF * 60 - MINM, mm));
       st.view = 'dia'; st.day = ln.getAttribute('data-k'); st.unit = ln.getAttribute('data-u');
+      mm = Math.max(HI * 60, Math.min(HF * 60 - minDur(st.day, st.unit), mm));
       var e2 = ln.getAttribute('data-e'), ok2 = durs(st.day, st.unit, e2, mm);
       st.sel = ok2.length ? { k: st.day, u: st.unit, e: e2, a: mm, d: ok2.indexOf(st.dur) >= 0 ? st.dur : ok2[0] } : null;
       render(); mostrarEscolha();
@@ -526,7 +592,7 @@ html,body{max-width:100%;overflow-x:hidden}
     var e = col.getAttribute('data-e'), m = slotFromEvent(ev, col);
     if (m < minStart(st.day)) { toast('Esse horário já passou.'); return; }
     var ok = durs(st.day, st.unit, e, m);
-    if (!ok.length) { toast('Aqui não cabem 2 horas (mínimo de 2h, com 30 min de intervalo entre aluguéis). Escolha outro horário.'); return; }
+    if (!ok.length) { toast('Aqui não cabem ' + fmtDur(minDur(st.day, st.unit)) + ' livres (mínimo neste dia, com 30 min de intervalo entre aluguéis). Escolha outro horário.'); return; }
     var d = ok.indexOf(st.dur) >= 0 ? st.dur : ok[ok.length - 1] < st.dur ? ok[ok.length - 1] : ok[0];
     st.sel = { k: st.day, u: st.unit, e: e, a: m, d: d };
     render();
