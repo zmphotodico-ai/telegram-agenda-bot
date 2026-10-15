@@ -2695,13 +2695,10 @@ const UNIDADES_PEDIDO = {
 };
 const PEDIDO_VALIDADE_MS = 7 * 24 * 3600 * 1000;
 const PEDIDO_SEGURAR_MS = 6 * 3600 * 1000;
-const PEDIDO_LIMITE_IP = { max: 5, janela: 10 * 60 * 1000 };
-const PEDIDO_LIMITE_TEL = { max: 3, janela: 24 * 3600 * 1000 };
+const PEDIDO_ABERTO_MS = 6 * 3600 * 1000; // um pedido em aberto por telefone/IP; libera ao reservar, ignorar ou depois de 6h
 const DIAS_SEMANA = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
 
 const pedidosSite = new Map();     // id → pedido
-const pedidosPorIp = new Map();    // ip → [horários]
-const pedidosPorTel = new Map();   // telefone → [horários]
 
 async function telegram(metodo, corpo) {
   try {
@@ -2719,13 +2716,14 @@ async function telegram(metodo, corpo) {
   }
 }
 
-function passouDoLimite(mapa, chave, { max, janela }) {
+// pedido ainda em aberto (nem reservado nem ignorado, com menos de 6h) do mesmo telefone ou do mesmo IP
+function temPedidoEmAberto(telefone, ip) {
   const agora = Date.now();
-  const lista = (mapa.get(chave) || []).filter(t => agora - t < janela);
-  const passou = lista.length >= max;
-  if (!passou) lista.push(agora);
-  mapa.set(chave, lista);
-  return passou;
+  for (const p of pedidosSite.values()) {
+    if (p.reservado || p.ignorado || agora - p.criado >= PEDIDO_ABERTO_MS) continue;
+    if (p.telefoneChave === telefone || p.ip === ip) return true;
+  }
+  return false;
 }
 
 function somarDiasISO(dataISO, n) {
@@ -2901,33 +2899,36 @@ app.post("/pedido", async (req, res) => {
   const ip = String(req.headers["x-real-ip"] || "").trim()
     || String(req.headers["x-forwarded-for"] || "").split(",")[0].trim()
     || req.socket.remoteAddress || "?";
-  if (passouDoLimite(pedidosPorIp, ip, PEDIDO_LIMITE_IP)) return res.status(429).json({ ok: false });
   const hoje = dataISOemSP(new Date());
   const pedido = validarPedidoSite(req.body, hoje);
   if (!pedido) return res.status(400).json({ ok: false });
-  if (passouDoLimite(pedidosPorTel, telefoneInternacional(pedido.telefone), PEDIDO_LIMITE_TEL)) return res.status(429).json({ ok: false });
+  const telefoneChave = telefoneInternacional(pedido.telefone);
+  if (temPedidoEmAberto(telefoneChave, ip)) return res.status(429).json({ ok: false });
+
+  // entra na lista já agora (antes de qualquer espera), para dois envios seguidos não passarem juntos
+  const id = randomBytes(5).toString("hex");
+  const p = { ...pedido, telefoneChave, ip, criado: Date.now() };
+  pedidosSite.set(id, p);
   res.json({ ok: true });
 
   try {
-    const id = randomBytes(5).toString("hex");
-    const p = {
-      ...pedido,
-      criado: Date.now(),
+    Object.assign(p, {
       chatId: CHAT_MATINAL,
       calId: CALENDAR_IDS[UNIDADES_PEDIDO[pedido.unidade].agenda],
       ini: new Date(`${pedido.data}T${pedido.inicio}:00-03:00`),
       fimData: new Date(`${pedido.data}T${pedido.fim}:00-03:00`),
-    };
+    });
     p.regraInicial = await conferirPedido(p);
-    pedidosSite.set(id, p);
     const r = await telegram("sendMessage", {
       chat_id: p.chatId,
       text: montarAvisoPedido(p),
       reply_markup: { inline_keyboard: tecladoPedido(id, p) },
     });
     p.messageId = r?.result?.message_id || null;
+    if (!p.messageId) pedidosSite.delete(id); // o aviso não chegou na equipe: não prende o cliente
   } catch (e) {
     console.error("Erro ao avisar pedido do site:", e.message);
+    pedidosSite.delete(id);
   }
 });
 
@@ -3027,7 +3028,7 @@ async function tratarBotaoPedido(cq) {
   }
 }
 
-// a cada 10 min: lembrete de "pré" segurado há 6h sem comprovante (nunca cancela) + limpeza da memória
+// a cada 10 min: lembrete de "pré" segurado há 6h sem comprovante (nunca cancela) + limpeza dos pedidos vencidos
 setInterval(async () => {
   const agora = Date.now();
   for (const [id, p] of pedidosSite) {
@@ -3037,9 +3038,6 @@ setInterval(async () => {
       await sendMessage(p.chatId,
         `⏰ Pedido do site seguro há 6h e ainda sem comprovante:\n📌 ${p.segurado.titulo} · ${diaDoPedido(p)}\n👤 ${p.nome} · 📞 ${telefoneLegivel(p.telefone)}\n\nO evento continua como pré na agenda. Não cancelei nada — vocês decidem.`, true);
     }
-  }
-  for (const mapa of [pedidosPorIp, pedidosPorTel]) {
-    for (const [k, lista] of mapa) if (!lista.some(t => agora - t < PEDIDO_LIMITE_TEL.janela)) mapa.delete(k);
   }
 }, 10 * 60 * 1000);
 // ===================== fim do pedido pelo site =====================
