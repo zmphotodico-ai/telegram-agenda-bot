@@ -954,9 +954,10 @@ async function horarioOcupado(calId, estudio, inicio, fim) {
 }
 
 // ===================== REGRAS DE ALUGUEL =====================
-// das 9h às 21h, em passos de 30 min; mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
-// 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B);
-// 15 a 29 min só com confirmação explícita (ok15); menos de 15 min nunca.
+// Site (cliente): das 9h às 21h, em passos de 30 min; mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
+// 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B); 15 a 29 min = "apertado"; menos de 15 min nunca.
+// Telegram (equipe: !agendar, !alterar, mensagem do site colada): mínimo 2h em qualquer dia e sem intervalo obrigatório;
+// só bloqueia sobreposição. Abaixo do mínimo do site ou colado/apertado vira aviso na confirmação.
 // Bloqueios/fechamentos (BLOQ, FECHAD, MANUTEN) não exigem intervalo, só não podem sobrepor.
 const ALUGUEL_MIN_MINUTOS = 120;
 const ALUGUEL_MIN_FDS_FERIADO = { aclimacao: 180, belavista: 240 };
@@ -1003,15 +1004,17 @@ function ehBloqueio(ev) {
 // regra pura (sem chamar a agenda): eventos = eventos do mesmo calendário perto do horário.
 // ignorarId: evento que não conta (ex.: o "pré" do próprio pedido, ao virar pago).
 // devolve { status: 'ok' | 'apertado' | 'recusa', motivo, ev, intervalo }
-function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = null) {
+// equipe: regras do Telegram → { status: 'ok', avisos: { abaixoSite, colado } } ou recusa (sobreposição, < 2h, horário, passo)
+function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = null, { equipe = false } = {}) {
   const minutosSP = (d) => ((d.getUTCHours() + 21) % 24) * 60 + d.getUTCMinutes(); // São Paulo = UTC−3
   if (!(fim > inicio) || dataISOemSP(inicio) !== dataISOemSP(fim) || minutosSP(inicio) < HORA_ABRE_MIN || minutosSP(fim) > HORA_FECHA_MIN) return { status: "recusa", motivo: "horario" };
   if (inicio.getUTCMinutes() % 30 || fim.getUTCMinutes() % 30) return { status: "recusa", motivo: "passo" };
   const dur = Math.round((fim - inicio) / 60000);
-  const minimo = duracaoMinimaMin(unidadeDoEstudio(estudio), dataISOemSP(inicio));
+  const minimoSite = duracaoMinimaMin(unidadeDoEstudio(estudio), dataISOemSP(inicio));
+  const minimo = equipe ? ALUGUEL_MIN_MINUTOS : minimoSite;
   if (dur < minimo) return { status: "recusa", motivo: "duracao", duracao: dur, minimo };
   const conflitantes = estudiosConflitantes(estudio);
-  let apertado = null;
+  let apertado = null, colado = null;
   for (const ev of (eventos || [])) {
     if (ev.status === "cancelled") continue;
     if (ignorarId && ev.id === ignorarId) continue;
@@ -1021,13 +1024,25 @@ function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = nul
     if (inicio < ef && fim > ei) return { status: "recusa", motivo: "conflito", ev };
     if (ehBloqueio(ev)) continue;
     const intervalo = Math.round((ei >= fim ? ei - fim : inicio - ef) / 60000);
+    if (equipe) {
+      if (intervalo < INTERVALO_NORMAL_MIN && (!colado || intervalo < colado.intervalo)) colado = { ev, intervalo };
+      continue;
+    }
     if (intervalo < INTERVALO_MINIMO_MIN) return { status: "recusa", motivo: "intervalo", ev, intervalo };
     if (intervalo < INTERVALO_NORMAL_MIN && (!apertado || intervalo < apertado.intervalo)) apertado = { status: "apertado", ev, intervalo };
   }
+  if (equipe) return { status: "ok", avisos: { abaixoSite: dur < minimoSite ? minimoSite : null, colado } };
   return apertado || { status: "ok" };
 }
 
-async function checarRegrasAluguel(calId, estudio, inicio, fim, ignorarId = null) {
+// avisos da confirmação no Telegram (a equipe pode fugir das regras do site)
+function avisosDaEquipe(regra) {
+  const av = regra.avisos || {};
+  return (av.abaixoSite ? `\nℹ️ Abaixo do mínimo do site para fim de semana (${formatarDuracao(av.abaixoSite)}) — criado pela equipe.` : "") +
+    (av.colado ? `\nℹ️ Colado com outro aluguel no mesmo estúdio (intervalo de ${av.colado.intervalo} min).` : "");
+}
+
+async function checarRegrasAluguel(calId, estudio, inicio, fim, ignorarId = null, opcoes = {}) {
   const folga = INTERVALO_NORMAL_MIN * 60000;
   const res = await calendar.events.list({
     calendarId: calId,
@@ -1036,7 +1051,7 @@ async function checarRegrasAluguel(calId, estudio, inicio, fim, ignorarId = null
     singleEvents: true,
     orderBy: "startTime",
   });
-  return classificarRegrasAluguel(estudio, inicio, fim, res.data.items || [], ignorarId);
+  return classificarRegrasAluguel(estudio, inicio, fim, res.data.items || [], ignorarId, opcoes);
 }
 
 function descreverEventoCurto(ev) {
@@ -2456,7 +2471,7 @@ function linhaDaRegra(regra) {
   if (regra.motivo === "passo") return "⚠️ Horário fora dos passos de 30 min";
   if (regra.motivo === "conflito") return `⚠️ Conflito: já existe ${descreverEventoCurto(regra.ev)}`;
   if (regra.motivo === "intervalo") return `⚠️ Conflito: intervalo de só ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)}`;
-  return `⚠️ Conflito: intervalo de ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)} (o normal é 30; 15 min só com ok15 pelo !agendar)`;
+  return `⚠️ Conflito: intervalo de ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)} (o site exige 30)`;
 }
 
 function montarAvisoPedido(p) {
@@ -2725,16 +2740,16 @@ function proximoDiaDaSemana(hojeISO, dw) {
 }
 
 // lê um texto solto de agendamento/alteração. Cada pedaço reconhecido sai do texto; o que sobra é o nome.
-// devolve { datas, horario, estudio, telefone, tipo, pago, ok15, nome, sobra }
+// devolve { datas, horario, estudio, telefone, tipo, pago, nome, sobra }
 function lerTextoAgendamento(texto, { nomeComPalavra = false } = {}) {
   const hoje = hojeEmSP();
   let t = ` ${String(texto || "").replace(/\s+/g, " ")} `;
-  const out = { datas: [], horario: null, estudio: null, telefone: null, tipo: null, pago: null, ok15: false, nome: null, sobra: "" };
+  const out = { datas: [], horario: null, estudio: null, telefone: null, tipo: null, pago: null, nome: null, sobra: "" };
   const tirar = (regex, fn) => { t = t.replace(regex, (...m) => { fn(m); return " ¦ "; }); };
 
   // "nome Ana Paula" (no !alterar): vai até o fim da linha
   if (nomeComPalavra) tirar(re("nome\\s*:?\\s+(.+)$"), m => { out.nome = m[1].trim(); });
-  tirar(re("ok15", "g"), () => { out.ok15 = true; });
+  tirar(re("ok15", "g"), () => {}); // ok15 não é mais preciso; se alguém escrever por hábito, não vira nome
   tirar(re("pago\\s*(?:r\\$\\s*)?(\\d+(?:[.,]\\d{1,2})?)"), m => { out.tipo = "pago"; out.pago = m[1].replace(",", "."); });
   tirar(re("pago"), () => { if (!out.tipo) out.tipo = "pago"; });
   tirar(re("zm2"), () => { out.tipo = "zm2"; });
@@ -2839,7 +2854,7 @@ function dadosDoEventoBot(r, c) {
 
 function motivoDaRecusa(regra, r) {
   const data = r.inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-  if (regra.motivo === "duracao") return `A duração mínima em ${data} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(Math.max(0, regra.duracao))}).\nMínimo: 2h de segunda a sexta; sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista.`;
+  if (regra.motivo === "duracao") return `A duração mínima em ${data} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(Math.max(0, regra.duracao))}).`;
   if (regra.motivo === "horario") return "Os aluguéis vão das 9h às 21h.";
   if (regra.motivo === "passo") return "Use horários de 30 em 30 min (ex.: 14:00 ou 14:30).";
   if (regra.motivo === "conflito") return `O estúdio ${r.estudio} já está ocupado.\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
@@ -2877,13 +2892,13 @@ async function seguirAgendamento(chave, conv) {
 // cada data é conferida e criada por conta própria; o resultado de cada uma vai numa mensagem
 async function criarAgendamentos(chave, conv) {
   const c = { nome: conv.nome, telefone: conv.telefone, tipo: conv.tipo || "pre", pago: conv.pago || null };
-  const criadas = [], apertadas = [];
+  const criadas = [];
   for (const dataISO of conv.datas) {
     const r = montarReserva(dataISO, conv.horario, conv.estudio);
     const dm = `${dataISO.slice(8, 10)}/${dataISO.slice(5, 7)}`;
     let regra;
     try {
-      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim);
+      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim, null, { equipe: true });
     } catch (e) {
       console.error("Erro ao checar regras de aluguel:", e.message);
       await sendMessage(conv.chatId, `❌ ${dm}: não criei. Não consegui conferir a agenda agora (${e.message}). Tente de novo em instantes.`, true);
@@ -2893,14 +2908,13 @@ async function criarAgendamentos(chave, conv) {
       await sendMessage(conv.chatId, `❌ ${dm}: não criei. ${motivoDaRecusa(regra, r)}`, true);
       continue;
     }
-    if (regra.status === "apertado" && !conv.ok15) { apertadas.push({ dataISO, regra }); continue; }
     try {
       const dados = dadosDoEventoBot(r, c);
       const { id, descricao } = await criarEventoComId(dados);
       const rid = randomBytes(5).toString("hex");
       agendamentosBot.set(rid, { eventoId: id, calId: r.calId, chatId: conv.chatId, userId: conv.userId, criado: Date.now(), r, c: { ...c }, descricaoGerada: descricao });
       const achado = conv.telefoneAchado ? `\n📞 Telefone achado ${conv.telefoneAchado.origem} ("${conv.telefoneAchado.nome}"). Se não for esse: !alterar tel 11999998888` : "";
-      await enviarConfirmacaoAgendamento(rid, "✅ Criado:", achado);
+      await enviarConfirmacaoAgendamento(rid, "✅ Criado:", avisosDaEquipe(regra) + achado);
       criadas.push(r);
     } catch (e) {
       await sendMessage(conv.chatId, `❌ ${dm}: erro ao criar o evento (${e.message}).`, true);
@@ -2910,12 +2924,6 @@ async function criarAgendamentos(chave, conv) {
     await esperar(1500);
     const d = { nome: c.nome, naoCobrar: c.tipo === "zm" };
     await enviarTextoELink(conv.chatId, montarMensagemParaClienteMulti(d, criadas, c.tipo === "pago" ? c.pago : null), c.telefone);
-  }
-  if (apertadas.length) {
-    const menor = Math.min(...apertadas.map(a => a.regra.intervalo));
-    const linhas = apertadas.map(a => `• ${a.dataISO.slice(8, 10)}/${a.dataISO.slice(5, 7)}: perto de ${descreverEventoCurto(a.regra.ev)}`).join("\n");
-    conversasAgendamento[chave] = { ...conv, datas: apertadas.map(a => a.dataISO), passo: "ok15", telefoneBuscado: true };
-    await sendMessage(conv.chatId, `⚠️ Intervalo apertado: ${menor} min. Responda ok15 para criar mesmo assim.\n${linhas}`, true);
   }
 }
 
@@ -2929,7 +2937,7 @@ async function iniciarAgendamento(chave, chatId, userId, bruto) {
     const p = (n) => String(n).padStart(2, "0");
     conv = {
       datas: campos.datas.map(d => `${d.ano}-${p(d.mes)}-${p(d.dia)}`), horario: campos.horario, estudio: campos.estudio,
-      nome: campos.nome, telefone: campos.telefone ? telefoneInternacional(campos.telefone) : null, tipo: null, pago: null, ok15: false,
+      nome: campos.nome, telefone: campos.telefone ? telefoneInternacional(campos.telefone) : null, tipo: null, pago: null,
     };
   } else {
     const lido = lerTextoAgendamento(bruto);
@@ -2952,14 +2960,9 @@ async function iniciarAgendamento(chave, chatId, userId, bruto) {
   await seguirAgendamento(chave, conv);
 }
 
-// resposta a uma pergunta do !agendar (data, horário, estúdio, nome, valor, telefone ou ok15)
+// resposta a uma pergunta do !agendar (data, horário, estúdio, nome, valor ou telefone)
 async function responderAgendamento(chave, conv, texto) {
   const t = texto.trim(), tn = normalizar(t);
-  if (conv.passo === "ok15") {
-    if (tn === "ok15") { conv.ok15 = true; delete conversasAgendamento[chave]; return criarAgendamentos(chave, conv); }
-    if (["nao", "cancelar"].includes(tn)) { delete conversasAgendamento[chave]; return sendMessage(conv.chatId, "Ok, não criei. 👍", true); }
-    return sendMessage(conv.chatId, "Responda ok15 para criar mesmo assim, ou cancelar.", true);
-  }
   if (conv.passo === "telefone") {
     if (["sem", "sem telefone", "nao tem", "nao"].includes(tn)) conv.telefone = "";
     else {
@@ -3015,7 +3018,7 @@ function novaDescricao(atual, geradaAntes, geradaAgora) {
   return [geradaAgora, ...extras].join("\n");
 }
 
-async function alterarAgendamento(chatId, userId, texto, rid, ok15 = false) {
+async function alterarAgendamento(chatId, userId, texto, rid) {
   const responder = (t) => sendMessage(chatId, t, true);
   const mud = lerTextoAgendamento(texto, { nomeComPalavra: true });
   if (mud.sobra) return responder(`⚠️ Não entendi: "${mud.sobra}". Nada foi alterado.\n${EXEMPLO_ALTERAR}`);
@@ -3044,15 +3047,11 @@ async function alterarAgendamento(chatId, userId, texto, rid, ok15 = false) {
 
     let regra;
     try {
-      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim, r.calId === a.calId ? a.eventoId : null);
+      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim, r.calId === a.calId ? a.eventoId : null, { equipe: true });
     } catch (e) {
       return responder(`❌ Não consegui conferir a agenda agora (${e.message}). Nada foi alterado.`);
     }
     if (regra.status === "recusa") return responder(`❌ Não alterei. ${motivoDaRecusa(regra, r)}`);
-    if (regra.status === "apertado" && !ok15 && !mud.ok15) {
-      conversasAgendamento[`${chatId}:${userId}`] = { passo: "ok15alt", chatId, userId, rid, texto };
-      return responder(`⚠️ Intervalo apertado: ${regra.intervalo} min. Responda ok15 para alterar mesmo assim.\n• perto de ${descreverEventoCurto(regra.ev)}`);
-    }
 
     const { titulo, descricao, eventBody } = montarEvento(dadosDoEventoBot(r, c));
     eventBody.description = novaDescricao(ev.description, a.descricaoGerada, descricao);
@@ -3071,7 +3070,7 @@ async function alterarAgendamento(chatId, userId, texto, rid, ok15 = false) {
       a.calId = r.calId;
     }
     Object.assign(a, { r, c, descricaoGerada: descricao, titulo });
-    await enviarConfirmacaoAgendamento(rid, "✏️ Alterado:");
+    await enviarConfirmacaoAgendamento(rid, "✏️ Alterado:", avisosDaEquipe(regra));
   } catch (e) {
     await responder(`❌ Erro ao alterar o evento (${e.message}).`);
   } finally {
@@ -3141,12 +3140,6 @@ async function tratarMensagemAgendamento(message) {
   const conv = conversasAgendamento[chave];
   if (conv && !ehComando) {
     if (tn === "cancelar") { delete conversasAgendamento[chave]; await sendMessage(chatId, "Ok, cancelado. Nada foi criado. 👍", true); return true; }
-    if (conv.passo === "ok15alt") {
-      delete conversasAgendamento[chave];
-      if (normalizar(tn) === "ok15") await alterarAgendamento(chatId, userId, conv.texto, conv.rid, true);
-      else await sendMessage(chatId, "Ok, não alterei. 👍", true);
-      return true;
-    }
     await responderAgendamento(chave, conv, texto);
     return true;
   }
