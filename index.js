@@ -2315,6 +2315,8 @@ const PRECOS_SITE = {
   },
 };
 const FAIXAS_PESSOAS = [[1, 2], [3, 5], [6, 8]]; // 9 = "9 ou mais": combinar valor
+// segunda-feira (exceto feriado), Estúdio 2 da Bela Vista, 1–2 pessoas: R$50/h; as outras faixas seguem o dia útil
+const PRECO_SEGUNDA_BV2 = 50;
 // e-mail sozinho na linha: o WhatsApp vira link e o cliente copia com um toque
 const PIX_TEXTO = "Chave Pix (CNPJ): 43.345.289/0001-93\nou e-mail:\nzmphoto@zmphoto.com.br\nFavorecido: Zemaria Produções Fotográficas LTDA";
 const UNIDADES_PEDIDO = {
@@ -2411,7 +2413,11 @@ function reais(v) {
 function calcularValorPedido(p) {
   const i = FAIXAS_PESSOAS.findIndex(([de, ate]) => p.pessoas >= de && p.pessoas <= ate);
   if (i < 0) return null;
-  const porHora = PRECOS_SITE[p.unidade][ehFdsOuFeriado(p.data) ? "fds" : "semana"][p.estudio][i];
+  const fds = ehFdsOuFeriado(p.data);
+  const segunda = new Date(`${p.data}T12:00:00-03:00`).getUTCDay() === 1;
+  const porHora = (!fds && segunda && p.unidade === "belavista" && p.estudio === "2" && i === 0)
+    ? PRECO_SEGUNDA_BV2
+    : PRECOS_SITE[p.unidade][fds ? "fds" : "semana"][p.estudio][i];
   const total = Math.round(porHora * p.duracaoMin / 60 * 100) / 100;
   // mesma regra do sinal no resto do bot: 1/3 arredondado para baixo em múltiplos de R$10, mínimo R$50
   const antecipado = Math.min(total, Math.max(50, Math.floor(total / 3 / 10) * 10));
