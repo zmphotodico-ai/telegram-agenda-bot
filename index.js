@@ -954,7 +954,7 @@ async function horarioOcupado(calId, estudio, inicio, fim) {
 }
 
 // ===================== REGRAS DE ALUGUEL =====================
-// mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
+// das 9h às 21h, em passos de 30 min; mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
 // 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B);
 // 15 a 29 min só com confirmação explícita (ok15); menos de 15 min nunca.
 // Bloqueios/fechamentos (BLOQ, FECHAD, MANUTEN) não exigem intervalo, só não podem sobrepor.
@@ -962,6 +962,7 @@ const ALUGUEL_MIN_MINUTOS = 120;
 const ALUGUEL_MIN_FDS_FERIADO = { aclimacao: 180, belavista: 240 };
 const INTERVALO_NORMAL_MIN = 30;
 const INTERVALO_MINIMO_MIN = 15;
+const HORA_ABRE_MIN = 9 * 60, HORA_FECHA_MIN = 21 * 60; // aluguéis das 9h às 21h, em passos de 30 min
 
 // mesma lista do agenda.html
 const FERIADOS = [
@@ -1003,6 +1004,9 @@ function ehBloqueio(ev) {
 // ignorarId: evento que não conta (ex.: o "pré" do próprio pedido, ao virar pago).
 // devolve { status: 'ok' | 'apertado' | 'recusa', motivo, ev, intervalo }
 function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = null) {
+  const minutosSP = (d) => ((d.getUTCHours() + 21) % 24) * 60 + d.getUTCMinutes(); // São Paulo = UTC−3
+  if (!(fim > inicio) || dataISOemSP(inicio) !== dataISOemSP(fim) || minutosSP(inicio) < HORA_ABRE_MIN || minutosSP(fim) > HORA_FECHA_MIN) return { status: "recusa", motivo: "horario" };
+  if (inicio.getUTCMinutes() % 30 || fim.getUTCMinutes() % 30) return { status: "recusa", motivo: "passo" };
   const dur = Math.round((fim - inicio) / 60000);
   const minimo = duracaoMinimaMin(unidadeDoEstudio(estudio), dataISOemSP(inicio));
   if (dur < minimo) return { status: "recusa", motivo: "duracao", duracao: dur, minimo };
@@ -1147,78 +1151,10 @@ function montarMensagemParaClienteMulti(d, reservas, pagoFinal) {
   return `Obrigado ${primeiroNome}! 😊\nPré-marcado:\n${linhas}\n${endereco}\n\nPara fazer a reserva pedimos R$ ${sinalTotal} antecipado (total), ok?\n\nPIX: zmphoto@zmphoto.com.br\nou CNPJ 43.345.289/0001-93\nZemaria Produções Fotográficas LTDA`;
 }
 
-async function enviarResumoAgendamento(chatId, conversa) {
-  const d = conversa.dados;
-  let linhas = "";
-  for (const r of conversa.reservas) {
-    const { inicio, fim } = montarDatas(r);
-    const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", weekday: 'short', day: '2-digit', month: '2-digit' });
-    const hi = inicio.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-    const hf = fim.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: '2-digit', minute: '2-digit' });
-    linhas += `\n📅 ${dataFmt} · ${hi} às ${hf} · Estúdio ${r.estudio} (${r.unidade})`;
-  }
-  await sendMessage(chatId,
-    `📋 *Confirma este agendamento?*\n${linhas}\n\n👤 ${d.nome}\n📞 ${d.telefone}\n${d.pago ? `💰 pago R$${d.pago} (total)` : (d.naoCobrar ? "🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "✋ confirmar presença (não cobra sinal)" : "🔖 pré-reserva"))}\n\n` +
-    `Responda *SIM* para confirmar ou *NÃO* para cancelar.`
-  );
-}
-
-// decide o próximo campo faltante no agendamento rápido e pergunta só ele.
-// ordem: data(s) -> horário -> estúdio -> nome -> telefone -> tipo -> confirmação final
-async function avancarAgendamentoRapido(chatId, conversa) {
-  const d = conversa.dados;
-  if (!conversa.reservas || conversa.reservas.length === 0) {
-    conversa.qtd = 1; conversa.passo = 'data';
-    await sendMessage(chatId, "📅 Qual a *data*? (ex: 25/07)");
-    return;
-  }
-  if (conversa.reservas.some(r => r.h1 === undefined)) {
-    conversa.passo = 'faltaHorario';
-    await sendMessage(chatId, "🕐 Qual o *horário*? (ex: 14-16 ou 14:30-16:30)");
-    return;
-  }
-  if (conversa.reservas.some(r => !r.estudio)) {
-    conversa.passo = 'faltaEstudio';
-    await sendMessage(chatId, "📸 Qual o *estúdio*?\n\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3");
-    return;
-  }
-  if (!d.nome) {
-    conversa.passo = 'nome';
-    await sendMessage(chatId, "👤 Qual o *nome* do cliente?");
-    return;
-  }
-  if (!d.telefone) {
-    let conhecido = await buscarTelefoneConhecido(d.nome);
-    if (!conhecido) conhecido = await buscarContatoGoogle(d.nome);
-    if (conhecido) {
-      d._telefoneSugerido = conhecido.telefone;
-      conversa.passo = 'confirmarTelefoneConhecido';
-      const origemTxt = conhecido.origem ? ` (${conhecido.origem})` : " em outra reserva";
-      await sendMessage(chatId, `📱 Já tenho o telefone *${conhecido.telefone}* de "${conhecido.nome}"${origemTxt}.\nÉ esse mesmo? Responda *SIM* ou digite o telefone correto.`);
-      return;
-    }
-    conversa.passo = 'telefone';
-    await sendMessage(chatId, "📞 Qual o *telefone*? (com DDD, ex: 11999998888)");
-    return;
-  }
-  // 6) falta o tipo (pré/pago/não cobrar/confirmar)? Se já veio no texto (zm/zm2/pré), vai direto ao resumo
-  if (d.naoCobrar || d.confirmarPresenca || (d.pago === null && conversa._tipoDefinido)) {
-    conversa.passo = 'confirmar';
-    await enviarResumoAgendamento(chatId, conversa);
-    return;
-  }
-  conversa.passo = 'pagamento';
-  await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago*, é pra *não cobrar* ou só *confirmar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
-}
-
 const COR_POR_ESTUDIO = { C: "1", D: "4", "2": "2", "3": "7" };
 
-async function criarEvento(dados) {
-  return (await criarEventoComId(dados)).titulo;
-}
-
 // dados.obs: linha extra na descrição; dados.antecipadoPago: "R$ 66,67" → reserva paga ("antecipado R$ 66,67 pago")
-async function criarEventoComId(dados) {
+function montarEvento(dados) {
   const hTitulo = (h, m) => (m ? `${h}:${String(m).padStart(2, "0")}` : `${h}`);
   const pago = dados.pago || dados.antecipadoPago;
   const titulo = `${hTitulo(dados.h1, dados.m1)}-${hTitulo(dados.h2, dados.m2)}/${dados.estudio}${pago ? "" : " pré"}`;
@@ -1237,71 +1173,13 @@ async function criarEventoComId(dados) {
   };
   const cor = COR_POR_ESTUDIO[dados.estudio];
   if (cor) eventBody.colorId = cor;
-  const criado = await calendar.events.insert({ calendarId: dados.calId, requestBody: eventBody });
-  return { titulo, id: criado?.data?.id || null };
+  return { titulo, descricao, eventBody };
 }
 
-// confere as regras de aluguel de todas as reservas e, se estiver tudo certo, cria os eventos.
-// conflito, intervalo < 15 min ou duração < 2h: avisa e não cria nada.
-// intervalo de 15 a 29 min: pede "ok15" (conversa.ok15) antes de criar.
-async function concluirAgendamento(chatId, conversa) {
-  const d = conversa.dados;
-  const apertados = [];
-  for (const r of conversa.reservas) {
-    const { inicio, fim } = montarDatas(r);
-    r.inicio = inicio; r.fim = fim;
-    let regra;
-    try {
-      regra = await checarRegrasAluguel(r.calId, r.estudio, inicio, fim);
-    } catch (e) {
-      console.error("Erro ao checar regras de aluguel:", e.message);
-      await sendMessage(chatId, `❌ Não consegui conferir a agenda agora (${e.message}). Nenhuma reserva foi criada. Tente de novo em instantes.`);
-      delete conversasAgendamento[chatId];
-      return;
-    }
-    const dataFmt = inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-    if (regra.status === "recusa") {
-      let motivo;
-      if (regra.motivo === "duracao") motivo = `A duração mínima em ${dataFmt} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(regra.duracao)}).\nMínimo: 2h de segunda a sexta; sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista.`;
-      else if (regra.motivo === "conflito") motivo = `O estúdio ${r.estudio} já está ocupado em ${dataFmt}.\nJá existe: ${descreverEventoCurto(regra.ev)}.`;
-      else motivo = `Intervalo de só ${regra.intervalo} min com outro aluguel (mínimo 15, o normal é 30).\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
-      await sendMessage(chatId, `❌ ${motivo}\n\nNenhuma reserva foi criada. Refaça com outro horário.`);
-      delete conversasAgendamento[chatId];
-      return;
-    }
-    if (regra.status === "apertado") apertados.push({ r, regra, dataFmt });
-  }
-  if (apertados.length && !conversa.ok15) {
-    const linhas = apertados.map(a => `• Estúdio ${a.r.estudio} em ${a.dataFmt}: perto de ${descreverEventoCurto(a.regra.ev)}`).join("\n");
-    const menor = Math.min(...apertados.map(a => a.regra.intervalo));
-    conversa.passo = 'ok15';
-    await sendMessage(chatId, `⚠️ Intervalo apertado: ${menor} min (o normal é 30). Responda *ok15* para criar mesmo assim.\n${linhas}\n\n_(ou *NÃO* para cancelar)_`);
-    return;
-  }
-  let pagoFinal = d.pago;
-  if (pagoFinal) {
-    const minimoTotal = conversa.reservas.length * 50;
-    if (parseFloat(pagoFinal) < minimoTotal) {
-      pagoFinal = String(minimoTotal);
-      await sendMessage(chatId, `ℹ️ O valor informado é menor que o mínimo (R$50/dia). Ajustei para R$${minimoTotal} (${conversa.reservas.length} dia(s)).`);
-    }
-  }
-  const titulos = [];
-  try {
-    for (const r of conversa.reservas) {
-      const titulo = await criarEvento({ ...r, nome: d.nome, telefone: d.telefone, pago: pagoFinal, naoCobrar: d.naoCobrar, confirmarPresenca: d.confirmarPresenca });
-      titulos.push(titulo);
-    }
-    const lista = titulos.map(t => `📌 ${t}`).join("\n");
-    const statusTxt = pagoFinal ? `\n💰 pago R$${pagoFinal} (total)` : (d.naoCobrar ? "\n🔕 não cobrar (marcado zm)" : (d.confirmarPresenca ? "\n✋ confirmar presença (não cobra sinal)" : "\n🔖 pré-reserva"));
-    await sendMessage(chatId, `✅ *Agendado com sucesso!* (${titulos.length} data${titulos.length > 1 ? "s" : ""})\n${lista}\n👤 ${d.nome} · ${d.telefone}${statusTxt}\n\n👇 Abaixo, a mensagem pronta para encaminhar ao cliente:`);
-    await esperar(1500);
-    const msgCliente = montarMensagemParaClienteMulti(d, conversa.reservas, pagoFinal);
-    await enviarTextoELink(chatId, msgCliente, d.telefone);
-  } catch (e) {
-    await sendMessage(chatId, `❌ Erro ao criar o(s) evento(s): ${e.message}`);
-  }
-  delete conversasAgendamento[chatId];
+async function criarEventoComId(dados) {
+  const { titulo, descricao, eventBody } = montarEvento(dados);
+  const criado = await calendar.events.insert({ calendarId: dados.calId, requestBody: eventBody });
+  return { titulo, descricao, id: criado?.data?.id || null };
 }
 
 async function buscarTelefoneConhecido(nomeBuscado) {
@@ -2077,9 +1955,10 @@ async function consultarAgenda(argsTexto, destino) {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   try {
-    // toque nos botões do aviso de pedido do site
+    // toque nos botões (aviso de pedido do site; confirmação do !agendar)
     if (req.body.callback_query) {
-      await tratarBotaoPedido(req.body.callback_query);
+      if (String(req.body.callback_query.data || "").startsWith("ag:")) await tratarBotaoAgendamento(req.body.callback_query);
+      else await tratarBotaoPedido(req.body.callback_query);
       return;
     }
     const message = req.body.message;
@@ -2146,261 +2025,8 @@ app.post("/webhook", async (req, res) => {
         return;
       }
 
-      if (conversasAgendamento[chatId] && textoMensagem === 'cancelar') {
-        delete conversasAgendamento[chatId];
-        await sendMessage(chatId, "Agendamento cancelado. 👍");
-        return;
-      }
-
-      // mensagem do site colada (sem comando) = "!agendar " + mensagem
-      const ehMensagemSite = !textoMensagem.startsWith('!') && /gostaria de reservar o est[úu]dio/i.test(textoOriginal);
-
-      // !agendar COM dados soltos (ex.: "!agendar amanhã 14-16 A João 11999998888")
-      if (ehMensagemSite || (/^!agendar\s+\S/.test(textoOriginal) && !/^!agendar\s+\d+$/.test(textoMensagem))) {
-        const bruto = textoOriginal.replace(/^!agendar\s+/i, "").trim();
-        await sendMessage(chatId, "🔎 Entendendo os dados, um instante...");
-        // mensagem do site: estúdio, data e horário lidos direto do texto (IA só para nome/telefone)
-        const site = interpretarMensagemSite(bruto);
-        const campos = site ? await camposDaMensagemSite(site) : await interpretarAgendamento(bruto);
-        if (site && site.unidadeErrada) await sendMessage(chatId, "⚠️ O estúdio da mensagem não é da unidade citada. Vou perguntar o estúdio.");
-
-        if (campos.datas.length === 0 && !campos.horario && !campos.estudio && !campos.nome && !campos.telefone) {
-          // não deu pra extrair nada útil — cai no passo a passo normal
-          conversasAgendamento[chatId] = { passo: 'data', qtd: 1, reservas: [], dados: {} };
-          await sendMessage(chatId, "Não consegui entender os dados soltos. Vamos passo a passo. 😊\n\nQual a *data*? (ex: 25/07)");
-          return;
-        }
-
-        // monta as reservas a partir das datas (todas com o mesmo horário/estúdio, se informados)
-        const conversa = { passo: null, qtd: Math.max(1, campos.datas.length), reservas: [], dados: {}, rapido: true, penduraHorEst: {} };
-        const est = campos.estudio ? validarEstudio(campos.estudio) : null;
-        if (campos.datas.length > 0) {
-          for (const dt of campos.datas) {
-            const r = { dia: dt.dia, mes: dt.mes };
-            if (dt.ano) r.ano = dt.ano;
-            if (campos.horario) { r.h1 = campos.horario.h1; r.m1 = campos.horario.m1; r.h2 = campos.horario.h2; r.m2 = campos.horario.m2; }
-            if (est) { r.estudio = est.estudio; r.calId = est.calId; r.unidade = est.unidade; }
-            conversa.reservas.push(r);
-          }
-        }
-        conversa.penduraHorEst = { horario: campos.horario || null, est: est || null };
-        if (campos.nome) conversa.dados.nome = campos.nome;
-        if (campos.telefone) conversa.dados.telefone = campos.telefone;
-        // tipo veio no texto? (zm/zm2/pago/pre) já preenche pra pular a pergunta depois
-        if (campos.tipo === 'zm') { conversa.dados.naoCobrar = true; conversa.dados.confirmarPresenca = false; conversa.dados.pago = null; }
-        else if (campos.tipo === 'zm2') { conversa.dados.confirmarPresenca = true; conversa.dados.naoCobrar = false; conversa.dados.pago = null; }
-        else if (campos.tipo === 'pre') { conversa.dados.pago = null; conversa.dados.naoCobrar = false; conversa.dados.confirmarPresenca = false; conversa._tipoDefinido = true; }
-        // "pago" precisa do valor, então não pré-preenche aqui (deixa perguntar o valor)
-
-        // resumo do que entendeu
-        const linhas = [];
-        if (campos.datas.length) linhas.push(`📅 ${campos.datas.map(d => `${String(d.dia).padStart(2,"0")}/${String(d.mes).padStart(2,"0")}`).join(", ")}`);
-        else linhas.push("📅 (faltando)");
-        linhas.push(campos.horario ? `🕐 ${campos.horario.h1}${campos.horario.m1?":"+String(campos.horario.m1).padStart(2,"0"):""}-${campos.horario.h2}${campos.horario.m2?":"+String(campos.horario.m2).padStart(2,"0"):""}` : "🕐 (faltando)");
-        linhas.push(est ? `📸 Estúdio ${est.estudio} (${est.unidade})` : "📸 (faltando)");
-        linhas.push(campos.nome ? `👤 ${campos.nome}` : "👤 (faltando)");
-        linhas.push(campos.telefone ? `📞 ${campos.telefone}` : "📞 (faltando)");
-        if (campos.tipo === 'zm') linhas.push("🔕 não cobrar (zm)");
-        else if (campos.tipo === 'zm2') linhas.push("✋ confirmar presença (zm2)");
-        else if (campos.tipo === 'pre') linhas.push("🔖 pré-reserva");
-        conversasAgendamento[chatId] = conversa;
-
-        await sendMessage(chatId, `📋 Entendi assim:\n${linhas.join("\n")}\n\nSe estiver certo, responda *ok* para continuar. Se algo ficou errado, escreva *cancelar* e faça de novo.`);
-        conversa.passo = 'confirmarRapido';
-        return;
-      }
-
-      if (textoMensagem === '!agendar' || /^!agendar\s+\d+$/.test(textoMensagem)) {
-        const mQtd = textoMensagem.match(/^!agendar\s+(\d+)$/);
-        const qtd = mQtd ? Math.max(1, Math.min(10, parseInt(mQtd[1]))) : 1;
-        conversasAgendamento[chatId] = { passo: 'data', qtd, reservas: [], dados: {} };
-        const rotulo = qtd > 1 ? ` (data 1 de ${qtd})` : "";
-        await sendMessage(chatId, `📅 *Novo agendamento*${rotulo}\n\nQual a *data*? (ex: 25/07)\n\n_(escreva 'cancelar' a qualquer momento para desistir)_`);
-        return;
-      }
-
-      if (conversasAgendamento[chatId]) {
-        const conversa = conversasAgendamento[chatId];
-        const d = conversa.dados;
-
-        // fluxo do agendamento rápido: confirma o que entendeu, depois pergunta só o que falta
-        if (conversa.passo === 'confirmarRapido') {
-          if (textoMensagem !== 'ok' && textoMensagem !== 'sim') {
-            await sendMessage(chatId, "Se estiver certo, responda *ok*. Para recomeçar, *cancelar*.");
-            return;
-          }
-          // decide o que falta e encaminha
-          await avancarAgendamentoRapido(chatId, conversa);
-          return;
-        }
-
-        // completa horário que faltava (vale para todas as reservas)
-        if (conversa.passo === 'faltaHorario') {
-          const v = validarHorario(textoOriginal);
-          if (!v) { await sendMessage(chatId, "⚠️ Horário inválido. Use HH-HH (ex: 14-16). Tente de novo:"); return; }
-          for (const r of conversa.reservas) { r.h1 = v.h1; r.m1 = v.m1; r.h2 = v.h2; r.m2 = v.m2; }
-          await avancarAgendamentoRapido(chatId, conversa);
-          return;
-        }
-        // completa estúdio que faltava
-        if (conversa.passo === 'faltaEstudio') {
-          const v = validarEstudio(textoOriginal);
-          if (!v) { await sendMessage(chatId, "⚠️ Estúdio inválido. A, B, C, D, AB, 1, 2 ou 3. Tente de novo:"); return; }
-          for (const r of conversa.reservas) { r.estudio = v.estudio; r.calId = v.calId; r.unidade = v.unidade; }
-          await avancarAgendamentoRapido(chatId, conversa);
-          return;
-        }
-
-        if (conversa.passo === 'data') {
-          const v = validarData(textoOriginal);
-          if (!v) { await sendMessage(chatId, "⚠️ Data inválida. Use o formato DD/MM (ex: 25/07). Tente de novo:"); return; }
-          conversa._temp = { dia: v.dia, mes: v.mes };
-          conversa.passo = 'horario';
-          await sendMessage(chatId, "🕐 Qual o *horário*? (ex: 14-16 ou 14:30-16:30)");
-          return;
-        }
-
-        if (conversa.passo === 'horario') {
-          const v = validarHorario(textoOriginal);
-          if (!v) { await sendMessage(chatId, "⚠️ Horário inválido. Use HH-HH (ex: 14-16). Tente de novo:"); return; }
-          conversa._temp.h1 = v.h1; conversa._temp.m1 = v.m1; conversa._temp.h2 = v.h2; conversa._temp.m2 = v.m2;
-          conversa.passo = 'estudio';
-          await sendMessage(chatId, "📸 Qual o *estúdio*?\n\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3");
-          return;
-        }
-
-        if (conversa.passo === 'estudio') {
-          const v = validarEstudio(textoOriginal);
-          if (!v) { await sendMessage(chatId, "⚠️ Estúdio inválido. Escreva A, B, C, D, AB, 1, 2 ou 3. Tente de novo:"); return; }
-          conversa._temp.estudio = v.estudio; conversa._temp.calId = v.calId; conversa._temp.unidade = v.unidade;
-          conversa.reservas.push(conversa._temp);
-          delete conversa._temp;
-          if (conversa.reservas.length < conversa.qtd) {
-            const proxima = conversa.reservas.length + 1;
-            conversa.passo = 'data';
-            await sendMessage(chatId, `📅 Data ${proxima} de ${conversa.qtd}: qual a *data*? (ex: 25/07)`);
-            return;
-          }
-          conversa.passo = 'nome';
-          await sendMessage(chatId, "👤 Qual o *nome* do cliente?");
-          return;
-        }
-
-        if (conversa.passo === 'nome') {
-          if (!textoOriginal || textoOriginal.length < 2) { await sendMessage(chatId, "⚠️ Escreva o nome do cliente:"); return; }
-          d.nome = textoOriginal;
-          let conhecido = await buscarTelefoneConhecido(textoOriginal);
-          if (!conhecido) conhecido = await buscarContatoGoogle(textoOriginal);
-          if (conhecido) {
-            d._telefoneSugerido = conhecido.telefone;
-            conversa.passo = 'confirmarTelefoneConhecido';
-            const origemTxt = conhecido.origem ? ` (${conhecido.origem})` : " em outra reserva";
-            await sendMessage(chatId, `📱 Já tenho o telefone *${conhecido.telefone}* de "${conhecido.nome}"${origemTxt}.\nÉ esse mesmo? Responda *SIM* ou digite o telefone correto.`);
-            return;
-          }
-          conversa.passo = 'telefone';
-          await sendMessage(chatId, "📞 Qual o *telefone*? (com DDD, ex: 11999998888)");
-          return;
-        }
-
-        if (conversa.passo === 'confirmarTelefoneConhecido') {
-          if (textoMensagem === 'sim') {
-            d.telefone = d._telefoneSugerido;
-            delete d._telefoneSugerido;
-            conversa.passo = 'pagamento';
-            await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
-            return;
-          }
-          const num = textoOriginal.replace(/\D/g, "");
-          if (num.length < 10) { await sendMessage(chatId, "⚠️ Responda *SIM* para usar o telefone sugerido, ou digite o telefone correto (com DDD):"); return; }
-          d.telefone = num;
-          delete d._telefoneSugerido;
-          conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
-          return;
-        }
-
-        if (conversa.passo === 'telefone') {
-          const num = textoOriginal.replace(/\D/g, "");
-          if (num.length < 10) { await sendMessage(chatId, "⚠️ Telefone inválido. Digite com DDD (ex: 11999998888):"); return; }
-          d.telefone = num;
-          conversa.passo = 'pagamento';
-          await sendMessage(chatId, "💰 É *pré-reserva*, já foi *pago* ou é pra *não cobrar*?\n\nEscreva 'pré', 'pago', 'não cobrar' ou 'confirmar'");
-          return;
-        }
-
-        if (conversa.passo === 'pagamento') {
-          if (textoMensagem === 'pre' || textoMensagem === 'pré') {
-            d.pago = null;
-            d.naoCobrar = false;
-            conversa.passo = 'confirmar';
-            await enviarResumoAgendamento(chatId, conversa);
-            return;
-          }
-          if (textoMensagem === 'pago') {
-            conversa.passo = 'valor';
-            await sendMessage(chatId, "💵 Qual o *valor pago*? (ex: 210)");
-            return;
-          }
-          if (textoMensagem === 'nao cobrar' || textoMensagem === 'não cobrar' || textoMensagem === 'naocobrar' || textoMensagem === 'nao' || textoMensagem === 'não' || textoMensagem === 'zm') {
-            d.pago = null;
-            d.naoCobrar = true;
-            d.confirmarPresenca = false;
-            conversa.passo = 'confirmar';
-            await enviarResumoAgendamento(chatId, conversa);
-            return;
-          }
-          if (textoMensagem === 'confirmar' || textoMensagem === 'confirma' || textoMensagem === 'presenca' || textoMensagem === 'presença' || textoMensagem === 'zm2') {
-            d.pago = null;
-            d.naoCobrar = false;
-            d.confirmarPresenca = true;
-            conversa.passo = 'confirmar';
-            await enviarResumoAgendamento(chatId, conversa);
-            return;
-          }
-          await sendMessage(chatId, "⚠️ Escreva 'pré', 'pago', 'não cobrar' ou 'confirmar':");
-          return;
-        }
-
-        if (conversa.passo === 'valor') {
-          const valor = textoOriginal.replace(/[^\d.,]/g, "").replace(",", ".");
-          if (!valor) { await sendMessage(chatId, "⚠️ Valor inválido. Digite só o número (ex: 210):"); return; }
-          d.pago = valor;
-          conversa.passo = 'confirmar';
-          await enviarResumoAgendamento(chatId, conversa);
-          return;
-        }
-
-        // intervalo apertado (15 a 29 min): só cria com "ok15"
-        if (conversa.passo === 'ok15') {
-          if (textoMensagem === 'ok15') {
-            conversa.ok15 = true;
-            await concluirAgendamento(chatId, conversa);
-            return;
-          }
-          if (textoMensagem === 'nao' || textoMensagem === 'não') {
-            delete conversasAgendamento[chatId];
-            await sendMessage(chatId, "Agendamento cancelado. 👍");
-            return;
-          }
-          await sendMessage(chatId, "Responda *ok15* para criar mesmo assim, ou *NÃO* para cancelar:");
-          return;
-        }
-
-        if (conversa.passo === 'confirmar') {
-          if (textoMensagem === 'sim') {
-            await concluirAgendamento(chatId, conversa);
-            return;
-          }
-          if (textoMensagem === 'nao' || textoMensagem === 'não') {
-            delete conversasAgendamento[chatId];
-            await sendMessage(chatId, "Agendamento cancelado. 👍");
-            return;
-          }
-          await sendMessage(chatId, "Responda *SIM* para confirmar ou *NÃO* para cancelar:");
-          return;
-        }
-      }
+      // !agendar, !alterar, mensagem do site colada e respostas às perguntas do agendamento
+      if (await tratarMensagemAgendamento(message)) return;
     }
 
     if (chatId === ADMIN_CHAT_ID || AGENDADORES.includes(chatId)) {
@@ -2544,7 +2170,8 @@ app.post("/webhook", async (req, res) => {
           "!vagos [estúdio/unidade] [semana/data] — mostra só os horários livres (ex.: !vagos bela vista hoje)\n" +
           "!status — diz se o respondedor está ligado\n" +
           "!ativar / !desativar — liga/desliga o respondedor\n" +
-          "!agendar — cria uma nova reserva (passo a passo)\n" +
+          "!agendar — cria direto, numa linha só (ex.: !agendar amanhã 14-16 C Maria 11999998888). Sem tipo = pré; acrescente pago 150, zm ou zm2. Várias datas: !agendar 20/10 e 27/10 14-16 C Maria\n" +
+          "!alterar — muda o último agendamento seu (ou responda à confirmação): !alterar 15-17 · !alterar sábado · !alterar estúdio D · !alterar pago 150 · !alterar tel 11999998888 · !alterar nome Ana\n" +
           "Cole a mensagem do site (Gostaria de reservar o Estúdio...) para agendar direto\n" +
           "!meuid — mostra seu ID\n\n" +
           "_Lembrete: este bot nunca manda mensagem direto pro cliente — ele sempre entrega o texto + um link pronto do WhatsApp, pra vocês conferirem e apertarem Enviar._"
@@ -2688,7 +2315,8 @@ const PRECOS_SITE = {
   },
 };
 const FAIXAS_PESSOAS = [[1, 2], [3, 5], [6, 8]]; // 9 = "9 ou mais": combinar valor
-const PIX_TEXTO = "Chave Pix (CNPJ): 43.345.289/0001-93\nou e-mail: zmphoto@zmphoto.com.br\nFavorecido: Zemaria Produções Fotográficas LTDA";
+// e-mail sozinho na linha: o WhatsApp vira link e o cliente copia com um toque
+const PIX_TEXTO = "Chave Pix (CNPJ): 43.345.289/0001-93\nou e-mail:\nzmphoto@zmphoto.com.br\nFavorecido: Zemaria Produções Fotográficas LTDA";
 const UNIDADES_PEDIDO = {
   aclimacao: { nome: "Aclimação", endereco: "Rua Gualaxo, 206", agenda: 0 },
   belavista: { nome: "Bela Vista", endereco: "Rua Santa Madalena, 46", agenda: 1 },
@@ -2775,7 +2403,8 @@ function telefoneLegivel(tel) {
 }
 
 function reais(v) {
-  return "R$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const centavos = Number.isInteger(v) ? 0 : 2;
+  return "R$ " + v.toLocaleString("pt-BR", { minimumFractionDigits: centavos, maximumFractionDigits: centavos });
 }
 
 // null quando passa de 8 pessoas (combinar valor)
@@ -2784,7 +2413,8 @@ function calcularValorPedido(p) {
   if (i < 0) return null;
   const porHora = PRECOS_SITE[p.unidade][ehFdsOuFeriado(p.data) ? "fds" : "semana"][p.estudio][i];
   const total = Math.round(porHora * p.duracaoMin / 60 * 100) / 100;
-  const antecipado = Math.round(total / 3 * 100) / 100;
+  // mesma regra do sinal no resto do bot: 1/3 arredondado para baixo em múltiplos de R$10, mínimo R$50
+  const antecipado = Math.min(total, Math.max(50, Math.floor(total / 3 / 10) * 10));
   const restante = Math.round((total - antecipado) * 100) / 100;
   return { porHora, faixa: FAIXAS_PESSOAS[i], limite: FAIXAS_PESSOAS[i][1], total, antecipado, restante };
 }
@@ -2816,6 +2446,8 @@ function linhaDaRegra(regra) {
   if (regra.status === "ok") return "✅ Horário livre (com 30 min de intervalo)";
   if (regra.status === "erro") return `⚠️ Não consegui conferir a agenda agora (${regra.erro}).`;
   if (regra.motivo === "duracao") return `⚠️ Abaixo do mínimo do dia (${formatarDuracao(regra.minimo)})`;
+  if (regra.motivo === "horario") return "⚠️ Fora do horário (9h às 21h)";
+  if (regra.motivo === "passo") return "⚠️ Horário fora dos passos de 30 min";
   if (regra.motivo === "conflito") return `⚠️ Conflito: já existe ${descreverEventoCurto(regra.ev)}`;
   if (regra.motivo === "intervalo") return `⚠️ Conflito: intervalo de só ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)}`;
   return `⚠️ Conflito: intervalo de ${regra.intervalo} min com ${descreverEventoCurto(regra.ev)} (o normal é 30; 15 min só com ok15 pelo !agendar)`;
@@ -2845,12 +2477,12 @@ function montarTextoDisponibilidade(p) {
     `📅 ${diaDoPedido(p)}, das ${p.inicio} às ${p.fim} (${formatarDuracao(p.duracaoMin)})\n\n`;
   if (!v) {
     return topo + "Como serão mais de 8 pessoas, o valor é combinado à parte — já te passamos por aqui.\n" +
-      "Para fazer a reserva, pedimos 1/3 antecipado via Pix:\n" + PIX_TEXTO + "\n\n" +
+      "Para fazer a reserva, pedimos um valor antecipado via Pix:\n" + PIX_TEXTO + "\n\n" +
       "A reserva só é feita após o envio do comprovante, ok? 😊";
   }
   return topo +
     `O valor para até ${v.limite} pessoas fica ${reais(v.total)}.\n` +
-    `Para fazer a reserva, pedimos 1/3 antecipado: ${reais(v.antecipado)} via Pix:\n` + PIX_TEXTO + "\n\n" +
+    `Para fazer a reserva, pedimos ${reais(v.antecipado)} antecipado via Pix:\n` + PIX_TEXTO + "\n\n" +
     "A reserva só é feita após o envio do comprovante, ok? 😊";
 }
 
@@ -3041,6 +2673,509 @@ setInterval(async () => {
   }
 }, 10 * 60 * 1000);
 // ===================== fim do pedido pelo site =====================
+
+// =====================================================================
+// AGENDAMENTO PELO TELEGRAM (!agendar e !alterar) — sem etapa de confirmação
+// "!agendar amanhã 14-16 C Maria 11999998888" confere as regras e cria direto.
+// Falta data, horário, estúdio ou nome? Pergunta só o que falta, um por vez.
+// Tipo: pré (padrão), "pago 150", "zm" (não cobrar) ou "zm2" (confirmar presença).
+// Depois de criar: botões ✏️ Alterar e ↩️ Desfazer (10 min, só quem é autorizado).
+// O bot só apaga um evento quando alguém da equipe toca em Desfazer.
+// =====================================================================
+const DESFAZER_PRAZO_MS = 10 * 60 * 1000;
+const ALTERAR_ULTIMO_MS = 24 * 3600 * 1000;
+const AGENDAMENTO_MEMORIA_MS = 7 * 24 * 3600 * 1000;
+const DIAS_CURTOS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const DIAS_POR_NOME = { domingo: 0, dom: 0, segunda: 1, seg: 1, terca: 2, ter: 2, quarta: 3, qua: 3, quinta: 4, qui: 4, sexta: 5, sex: 5, sabado: 6, sab: 6 };
+const EXEMPLO_ALTERAR = "O que muda? Ex.: 15-17 · sábado · estúdio D · pago 150 · tel 11999998888 · nome Ana";
+
+const agendamentosBot = new Map(); // rid → { eventoId, calId, chatId, userId, criado, r, c, descricaoGerada }
+const confirmacoesBot = new Map(); // "chat:mensagem" → rid (para !alterar respondendo à confirmação)
+const alterarPendente = {};        // "chat:pessoa" → rid (depois do botão ✏️ Alterar)
+
+// fronteiras de palavra que entendem acento (o \b do JS não entende "pré")
+const SEM_LETRA_ANTES = "(?<![\\p{L}\\d])", SEM_LETRA_DEPOIS = "(?![\\p{L}\\d])";
+const re = (corpo, flags = "") => new RegExp(SEM_LETRA_ANTES + corpo + SEM_LETRA_DEPOIS, "iu" + flags);
+const PALAVRAS_DE_LIGACAO = new Set(["e", "de", "das", "do", "dia", "as", "às", "a", "ate", "até", "no", "na", "para", "pra", "com", "o", "estudio", "estúdio", "est", "tel", "telefone"]);
+
+function hojeEmSP() {
+  return dataISOemSP(Date.now());
+}
+
+// "20/10" → "2026-10-20" (ano que vem se a data já passou há mais de 7 dias); null se a data não existe
+function dataDeDiaMes(dia, mes, ano, hojeISO) {
+  const p = (n) => String(n).padStart(2, "0");
+  let a = ano ? (ano < 100 ? 2000 + ano : ano) : parseInt(hojeISO.slice(0, 4));
+  let iso = `${a}-${p(mes)}-${p(dia)}`;
+  if (!ano && iso < somarDiasISO(hojeISO, -7)) iso = `${++a}-${p(mes)}-${p(dia)}`;
+  const d = new Date(`${iso}T12:00:00-03:00`);
+  return !isNaN(d) && d.toISOString().slice(0, 10) === iso ? iso : null;
+}
+
+// próxima ocorrência do dia da semana (hoje conta)
+function proximoDiaDaSemana(hojeISO, dw) {
+  const hoje = new Date(`${hojeISO}T12:00:00-03:00`).getUTCDay();
+  return somarDiasISO(hojeISO, (dw - hoje + 7) % 7);
+}
+
+// lê um texto solto de agendamento/alteração. Cada pedaço reconhecido sai do texto; o que sobra é o nome.
+// devolve { datas, horario, estudio, telefone, tipo, pago, ok15, nome, sobra }
+function lerTextoAgendamento(texto, { nomeComPalavra = false } = {}) {
+  const hoje = hojeEmSP();
+  let t = ` ${String(texto || "").replace(/\s+/g, " ")} `;
+  const out = { datas: [], horario: null, estudio: null, telefone: null, tipo: null, pago: null, ok15: false, nome: null, sobra: "" };
+  const tirar = (regex, fn) => { t = t.replace(regex, (...m) => { fn(m); return " ¦ "; }); };
+
+  // "nome Ana Paula" (no !alterar): vai até o fim da linha
+  if (nomeComPalavra) tirar(re("nome\\s*:?\\s+(.+)$"), m => { out.nome = m[1].trim(); });
+  tirar(re("ok15", "g"), () => { out.ok15 = true; });
+  tirar(re("pago\\s*(?:r\\$\\s*)?(\\d+(?:[.,]\\d{1,2})?)"), m => { out.tipo = "pago"; out.pago = m[1].replace(",", "."); });
+  tirar(re("pago"), () => { if (!out.tipo) out.tipo = "pago"; });
+  tirar(re("zm2"), () => { out.tipo = "zm2"; });
+  tirar(re("zm"), () => { out.tipo = out.tipo || "zm"; });
+  tirar(re("pr[eé](?:-reserva)?"), () => { out.tipo = out.tipo || "pre"; });
+  tirar(re("(?:sem\\s+telefone|tel(?:efone)?\\.?\\s*:?\\s*sem)"), () => { out.telefone = ""; });
+  tirar(/(?:tel(?:efone)?\.?\s*:?\s*)?(?<!\d)(?:\+?55[\s.-]?)?\(?\d{2}\)?[\s.-]?\d{4,5}[\s.-]?\d{4}(?!\d)/giu, m => {
+    if (out.telefone === null) out.telefone = telefoneInternacional(m[0].replace(/^\D+/, "").replace(/\D/g, ""));
+  });
+  tirar(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?(?![\d/])/g, m => {
+    const iso = dataDeDiaMes(parseInt(m[1]), parseInt(m[2]), m[3] ? parseInt(m[3]) : null, hoje);
+    if (iso) out.datas.push(iso); else out.sobra += ` ${m[0]}`;
+  });
+  tirar(re("depois\\s+de\\s+amanh[ãa]", "g"), () => out.datas.push(somarDiasISO(hoje, 2)));
+  tirar(re("amanh[ãa]", "g"), () => out.datas.push(somarDiasISO(hoje, 1)));
+  tirar(re("hoje", "g"), () => out.datas.push(hoje));
+  tirar(re("(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|dom|seg|ter|qua|qui|sex|s[áa]b)(?:-feira)?", "g"), m => {
+    out.datas.push(proximoDiaDaSemana(hoje, DIAS_POR_NOME[normalizar(m[1])]));
+  });
+  tirar(re("(?:das\\s+)?(\\d{1,2})(?:[:h](\\d{2}))?h?\\s*(?:-|–|às|as|a|até|ate)\\s*(\\d{1,2})(?:[:h](\\d{2}))?h?"), m => {
+    const v = validarHorario(`${m[1]}:${m[2] || "00"}-${m[3]}:${m[4] || "00"}`);
+    if (v) out.horario = v; else out.sobra += ` ${m[0].trim()}`;
+  });
+  tirar(re("(?:est[úu]dio|est\\.?)\\s*(ab|[abcd]|[123])"), m => { out.estudio = m[1].toUpperCase(); });
+  if (!out.estudio) tirar(/(?<![\p{L}\d])(AB|ab|[ABCD]|[bcd]|[123])(?![\p{L}\d])/u, m => { out.estudio = m[1].toUpperCase(); });
+
+  // o que sobrou: pedaços entre os marcadores, sem palavras de ligação nas pontas
+  const pedacos = t.split("¦").map(s => {
+    const palavras = s.replace(/[,;·]/g, " ").trim().split(/\s+/).filter(Boolean);
+    while (palavras.length && PALAVRAS_DE_LIGACAO.has(palavras[0].toLowerCase())) palavras.shift();
+    while (palavras.length && PALAVRAS_DE_LIGACAO.has(palavras.at(-1).toLowerCase())) palavras.pop();
+    return palavras.join(" ").replace(/^[.:\-–]+|[.:\-–]+$/g, "").trim();
+  }).filter(Boolean);
+  const resto = pedacos.join(" ");
+  if (nomeComPalavra) out.sobra = (out.sobra + " " + resto).trim();
+  else { out.nome = resto || null; out.sobra = out.sobra.trim(); }
+  return out;
+}
+
+// telefone de um nome conhecido, só quando não há dúvida: nome igual (ou nome e sobrenome todos presentes)
+// e um único telefone entre todos os achados na agenda e nos contatos do Google
+async function buscarTelefoneSeguro(nome) {
+  const alvo = normalizar(nome).replace(/\s+/g, " ").trim();
+  if (!alvo) return null;
+  const bate = (outro) => normalizar(outro).replace(/\s+/g, " ").trim() === alvo || classificarMatch(nome, outro) === "forte";
+  const achados = [];
+  const agora = Date.now(), janela = 180 * 24 * 3600 * 1000;
+  for (const calId of CALENDAR_IDS.slice(0, 2)) {
+    try {
+      const res = await calendar.events.list({ calendarId: calId, timeMin: new Date(agora - janela).toISOString(), timeMax: new Date(agora + janela).toISOString(), singleEvents: true });
+      for (const ev of (res.data.items || [])) {
+        const nomeEv = extrairNome(ev);
+        const tel = extrairTelefone((ev.summary || "") + " " + (ev.description || ""));
+        if (nomeEv && tel && bate(nomeEv)) achados.push({ nome: nomeEv, telefone: tel, origem: "em outra reserva" });
+      }
+    } catch (e) { console.error("Erro ao buscar telefone conhecido:", e.message); }
+  }
+  const { fortes, fracos } = await buscarCandidatosContato(nome);
+  for (const c of [...fortes, ...fracos]) if (bate(c.nome)) achados.push({ ...c, origem: "nos contatos do Google" });
+  // mesmo número com ou sem o 9 / com ou sem 55 conta como um só
+  const numeros = new Set(achados.map(a => a.telefone.slice(-8)));
+  return numeros.size === 1 ? achados[0] : null;
+}
+
+function rotuloTipo(c) {
+  if (c.tipo === "pago") return `pago R$${c.pago}`;
+  if (c.tipo === "zm") return "zm (não cobrar)";
+  if (c.tipo === "zm2") return "zm2 (confirmar presença)";
+  return "pré";
+}
+
+function horaTexto(h, m) {
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+// "sex 17/10 · 14:00–16:00 · Estúdio C (Aclimação) · Maria · 11 99999-8888 · pré"
+function resumoAgendamento(r, c) {
+  const dw = new Date(`${r.dataISO}T12:00:00-03:00`).getUTCDay();
+  return [
+    `${DIAS_CURTOS[dw]} ${r.dataISO.slice(8, 10)}/${r.dataISO.slice(5, 7)}`,
+    `${horaTexto(r.h1, r.m1)}–${horaTexto(r.h2, r.m2)}`,
+    `Estúdio ${r.estudio} (${agendaDoEstudio(r.estudio).unidade})`,
+    c.nome,
+    c.telefone ? telefoneLegivel(c.telefone) : "sem telefone",
+    rotuloTipo(c),
+  ].join(" · ");
+}
+
+// reserva = data + horário + estúdio; devolve também início/fim e a agenda certa
+function montarReserva(dataISO, horario, estudio) {
+  const ag = agendaDoEstudio(estudio);
+  return {
+    dataISO, estudio, calId: ag.calId, unidade: ag.unidade, ...horario,
+    inicio: new Date(`${dataISO}T${horaTexto(horario.h1, horario.m1)}:00-03:00`),
+    fim: new Date(`${dataISO}T${horaTexto(horario.h2, horario.m2)}:00-03:00`),
+  };
+}
+
+function dadosDoEventoBot(r, c) {
+  return { ...r, nome: c.nome, telefone: c.telefone || "", pago: c.tipo === "pago" ? c.pago : null, naoCobrar: c.tipo === "zm", confirmarPresenca: c.tipo === "zm2" };
+}
+
+function motivoDaRecusa(regra, r) {
+  const data = r.inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  if (regra.motivo === "duracao") return `A duração mínima em ${data} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(Math.max(0, regra.duracao))}).\nMínimo: 2h de segunda a sexta; sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista.`;
+  if (regra.motivo === "horario") return "Os aluguéis vão das 9h às 21h.";
+  if (regra.motivo === "passo") return "Use horários de 30 em 30 min (ex.: 14:00 ou 14:30).";
+  if (regra.motivo === "conflito") return `O estúdio ${r.estudio} já está ocupado.\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
+  return `Intervalo de só ${regra.intervalo} min com outro aluguel (mínimo 15, o normal é 30).\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
+}
+
+function tecladoAgendamento(rid) {
+  return { inline_keyboard: [[{ text: "✏️ Alterar", callback_data: `ag:alt:${rid}` }, { text: "↩️ Desfazer", callback_data: `ag:des:${rid}` }]] };
+}
+
+async function enviarConfirmacaoAgendamento(rid, prefixo, extra = "") {
+  const a = agendamentosBot.get(rid);
+  const resp = await telegram("sendMessage", { chat_id: a.chatId, text: `${prefixo} ${resumoAgendamento(a.r, a.c)}${extra}`, reply_markup: tecladoAgendamento(rid) });
+  if (resp?.result?.message_id) confirmacoesBot.set(`${a.chatId}:${resp.result.message_id}`, rid);
+}
+
+// pergunta só o que falta; com tudo em mãos, confere as regras e cria
+async function seguirAgendamento(chave, conv) {
+  const perguntar = async (passo, texto) => { conv.passo = passo; conversasAgendamento[chave] = conv; await sendMessage(conv.chatId, texto, true); };
+  if (!conv.datas.length) return perguntar("data", "📅 Qual a data? (ex.: 20/10, amanhã ou sábado)");
+  if (!conv.horario) return perguntar("horario", "🕐 Qual o horário? (ex.: 14-16 ou 14:30-16:30)");
+  if (!conv.estudio) return perguntar("estudio", "📸 Qual o estúdio?\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3");
+  if (!conv.nome) return perguntar("nome", "👤 Qual o nome do cliente?");
+  if (conv.tipo === "pago" && !conv.pago) return perguntar("valor", "💵 Qual o valor pago? (ex.: 150)");
+  if (conv.telefone === null && !conv.telefoneBuscado) {
+    conv.telefoneBuscado = true;
+    const achado = await buscarTelefoneSeguro(conv.nome);
+    if (achado) { conv.telefone = achado.telefone; conv.telefoneAchado = achado; }
+  }
+  if (conv.telefone === null) return perguntar("telefone", `📞 Qual o telefone da ${primeiroNome(conv.nome)}? (ou "sem")`);
+  delete conversasAgendamento[chave];
+  await criarAgendamentos(chave, conv);
+}
+
+// cada data é conferida e criada por conta própria; o resultado de cada uma vai numa mensagem
+async function criarAgendamentos(chave, conv) {
+  const c = { nome: conv.nome, telefone: conv.telefone, tipo: conv.tipo || "pre", pago: conv.pago || null };
+  const criadas = [], apertadas = [];
+  for (const dataISO of conv.datas) {
+    const r = montarReserva(dataISO, conv.horario, conv.estudio);
+    const dm = `${dataISO.slice(8, 10)}/${dataISO.slice(5, 7)}`;
+    let regra;
+    try {
+      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim);
+    } catch (e) {
+      console.error("Erro ao checar regras de aluguel:", e.message);
+      await sendMessage(conv.chatId, `❌ ${dm}: não criei. Não consegui conferir a agenda agora (${e.message}). Tente de novo em instantes.`, true);
+      continue;
+    }
+    if (regra.status === "recusa") {
+      await sendMessage(conv.chatId, `❌ ${dm}: não criei. ${motivoDaRecusa(regra, r)}`, true);
+      continue;
+    }
+    if (regra.status === "apertado" && !conv.ok15) { apertadas.push({ dataISO, regra }); continue; }
+    try {
+      const dados = dadosDoEventoBot(r, c);
+      const { id, descricao } = await criarEventoComId(dados);
+      const rid = randomBytes(5).toString("hex");
+      agendamentosBot.set(rid, { eventoId: id, calId: r.calId, chatId: conv.chatId, userId: conv.userId, criado: Date.now(), r, c: { ...c }, descricaoGerada: descricao });
+      const achado = conv.telefoneAchado ? `\n📞 Telefone achado ${conv.telefoneAchado.origem} ("${conv.telefoneAchado.nome}"). Se não for esse: !alterar tel 11999998888` : "";
+      await enviarConfirmacaoAgendamento(rid, "✅ Criado:", achado);
+      criadas.push(r);
+    } catch (e) {
+      await sendMessage(conv.chatId, `❌ ${dm}: erro ao criar o evento (${e.message}).`, true);
+    }
+  }
+  if (criadas.length) {
+    await esperar(1500);
+    const d = { nome: c.nome, naoCobrar: c.tipo === "zm" };
+    await enviarTextoELink(conv.chatId, montarMensagemParaClienteMulti(d, criadas, c.tipo === "pago" ? c.pago : null), c.telefone);
+  }
+  if (apertadas.length) {
+    const menor = Math.min(...apertadas.map(a => a.regra.intervalo));
+    const linhas = apertadas.map(a => `• ${a.dataISO.slice(8, 10)}/${a.dataISO.slice(5, 7)}: perto de ${descreverEventoCurto(a.regra.ev)}`).join("\n");
+    conversasAgendamento[chave] = { ...conv, datas: apertadas.map(a => a.dataISO), passo: "ok15", telefoneBuscado: true };
+    await sendMessage(conv.chatId, `⚠️ Intervalo apertado: ${menor} min. Responda ok15 para criar mesmo assim.\n${linhas}`, true);
+  }
+}
+
+async function iniciarAgendamento(chave, chatId, userId, bruto) {
+  const site = interpretarMensagemSite(bruto, hojeEmSP());
+  let conv;
+  if (site) {
+    // mensagem do site: estúdio, data e horário lidos direto do texto (IA só para nome/telefone)
+    const campos = await camposDaMensagemSite(site);
+    if (site.unidadeErrada) await sendMessage(chatId, "⚠️ O estúdio da mensagem não é da unidade citada. Vou perguntar o estúdio.", true);
+    const p = (n) => String(n).padStart(2, "0");
+    conv = {
+      datas: campos.datas.map(d => `${d.ano}-${p(d.mes)}-${p(d.dia)}`), horario: campos.horario, estudio: campos.estudio,
+      nome: campos.nome, telefone: campos.telefone ? telefoneInternacional(campos.telefone) : null, tipo: null, pago: null, ok15: false,
+    };
+  } else {
+    const lido = lerTextoAgendamento(bruto);
+    conv = { ...lido };
+    // sobrou número ou hora no nome: a leitura simples não entendeu tudo, pede ajuda à IA
+    if (lido.sobra || (lido.nome && /\d/.test(lido.nome))) {
+      const ia = await interpretarAgendamento(bruto);
+      if (ia._ok) {
+        if (!conv.datas.length) conv.datas = ia.datas.map(d => dataDeDiaMes(d.dia, d.mes, null, hojeEmSP())).filter(Boolean);
+        conv.horario = conv.horario || ia.horario;
+        conv.estudio = conv.estudio || ia.estudio;
+        if (conv.telefone === null && ia.telefone) conv.telefone = telefoneInternacional(ia.telefone);
+        if (ia.nome) conv.nome = ia.nome;
+      }
+    }
+    if (conv.nome && /\d/.test(conv.nome)) conv.nome = null;
+  }
+  conv.datas = [...new Set(conv.datas)].sort();
+  Object.assign(conv, { chatId, userId, passo: null });
+  await seguirAgendamento(chave, conv);
+}
+
+// resposta a uma pergunta do !agendar (data, horário, estúdio, nome, valor, telefone ou ok15)
+async function responderAgendamento(chave, conv, texto) {
+  const t = texto.trim(), tn = normalizar(t);
+  if (conv.passo === "ok15") {
+    if (tn === "ok15") { conv.ok15 = true; delete conversasAgendamento[chave]; return criarAgendamentos(chave, conv); }
+    if (["nao", "cancelar"].includes(tn)) { delete conversasAgendamento[chave]; return sendMessage(conv.chatId, "Ok, não criei. 👍", true); }
+    return sendMessage(conv.chatId, "Responda ok15 para criar mesmo assim, ou cancelar.", true);
+  }
+  if (conv.passo === "telefone") {
+    if (["sem", "sem telefone", "nao tem", "nao"].includes(tn)) conv.telefone = "";
+    else {
+      const dig = t.replace(/\D/g, "");
+      if (dig.length < 10 || dig.length > 13) return sendMessage(conv.chatId, `⚠️ Telefone com DDD (ex.: 11999998888), ou "sem":`, true);
+      conv.telefone = telefoneInternacional(dig);
+    }
+    return seguirAgendamento(chave, conv);
+  }
+  if (conv.passo === "nome") {
+    if (t.length < 2) return sendMessage(conv.chatId, "⚠️ Escreva o nome do cliente:", true);
+    conv.nome = t;
+    return seguirAgendamento(chave, conv);
+  }
+  if (conv.passo === "valor") {
+    const v = t.replace(/[^\d.,]/g, "").replace(",", ".");
+    if (!v || !parseFloat(v)) return sendMessage(conv.chatId, "⚠️ Escreva só o número (ex.: 150):", true);
+    conv.pago = v;
+    return seguirAgendamento(chave, conv);
+  }
+  const lido = lerTextoAgendamento(t);
+  if (conv.passo === "estudio" && !lido.estudio && /^a$/i.test(t)) lido.estudio = "A";
+  const faltou = {
+    data: [!lido.datas.length, "⚠️ Não entendi a data. Ex.: 20/10, amanhã ou sábado:"],
+    horario: [!lido.horario, "⚠️ Não entendi o horário. Ex.: 14-16 ou 14:30-16:30:"],
+    estudio: [!lido.estudio, "⚠️ Estúdio inválido. A, B, C, D, AB, 1, 2 ou 3:"],
+  }[conv.passo];
+  if (faltou && faltou[0]) return sendMessage(conv.chatId, faltou[1], true);
+  if (lido.datas.length && !conv.datas.length) conv.datas = [...new Set(lido.datas)].sort();
+  if (lido.horario && !conv.horario) conv.horario = lido.horario;
+  if (lido.estudio && !conv.estudio) conv.estudio = lido.estudio;
+  return seguirAgendamento(chave, conv);
+}
+
+// qual agendamento o !alterar muda: resposta à confirmação → aquele; senão o último dessa pessoa em 24h
+function agendamentoParaAlterar(chatId, userId, respondida) {
+  if (respondida) {
+    const rid = confirmacoesBot.get(`${chatId}:${respondida}`);
+    if (rid && agendamentosBot.has(rid)) return rid;
+  }
+  let melhor = null;
+  for (const [rid, a] of agendamentosBot) {
+    if (a.desfeito || String(a.userId) !== String(userId) || Date.now() - a.criado > ALTERAR_ULTIMO_MS) continue;
+    if (!melhor || a.criado > agendamentosBot.get(melhor).criado) melhor = rid;
+  }
+  return melhor;
+}
+
+// linhas da descrição que não foram escritas pelo bot na criação (ex.: [cobrado 1x ...]) continuam lá
+function novaDescricao(atual, geradaAntes, geradaAgora) {
+  const nossas = new Set((geradaAntes || "").split("\n"));
+  const extras = (atual || "").split("\n").filter(l => l.trim() && !nossas.has(l));
+  return [geradaAgora, ...extras].join("\n");
+}
+
+async function alterarAgendamento(chatId, userId, texto, rid, ok15 = false) {
+  const responder = (t) => sendMessage(chatId, t, true);
+  const mud = lerTextoAgendamento(texto, { nomeComPalavra: true });
+  if (mud.sobra) return responder(`⚠️ Não entendi: "${mud.sobra}". Nada foi alterado.\n${EXEMPLO_ALTERAR}`);
+  if (mud.datas.length > 1) return responder("⚠️ Uma data por vez no !alterar. Nada foi alterado.");
+  const temMudanca = mud.datas.length || mud.horario || mud.estudio || mud.tipo || mud.telefone !== null || mud.nome;
+  if (!temMudanca) return responder(EXEMPLO_ALTERAR);
+  if (mud.tipo === "pago" && !mud.pago) return responder("⚠️ Escreva o valor: pago 150. Nada foi alterado.");
+  const a = agendamentosBot.get(rid);
+  if (!a) return responder("Não achei o agendamento. Responda à mensagem de confirmação dele com !alterar.");
+  if (a.desfeito) return responder("Esse agendamento foi desfeito. Nada foi alterado.");
+  if (a.ocupado) return responder("Um instante, ainda estou cuidando da alteração anterior…");
+  a.ocupado = true;
+  try {
+    let ev;
+    try {
+      ev = (await calendar.events.get({ calendarId: a.calId, eventId: a.eventoId })).data;
+    } catch (e) {
+      return responder(`Não achei esse evento no Google Agenda (${e.message}). Nada foi alterado.`);
+    }
+    const horario = mud.horario || { h1: a.r.h1, m1: a.r.m1, h2: a.r.h2, m2: a.r.m2 };
+    const r = montarReserva(mud.datas[0] || a.r.dataISO, horario, mud.estudio || a.r.estudio);
+    const c = { ...a.c };
+    if (mud.nome) c.nome = mud.nome;
+    if (mud.telefone !== null) c.telefone = mud.telefone;
+    if (mud.tipo) { c.tipo = mud.tipo; c.pago = mud.tipo === "pago" ? mud.pago : null; }
+
+    let regra;
+    try {
+      regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim, r.calId === a.calId ? a.eventoId : null);
+    } catch (e) {
+      return responder(`❌ Não consegui conferir a agenda agora (${e.message}). Nada foi alterado.`);
+    }
+    if (regra.status === "recusa") return responder(`❌ Não alterei. ${motivoDaRecusa(regra, r)}`);
+    if (regra.status === "apertado" && !ok15 && !mud.ok15) {
+      conversasAgendamento[`${chatId}:${userId}`] = { passo: "ok15alt", chatId, userId, rid, texto };
+      return responder(`⚠️ Intervalo apertado: ${regra.intervalo} min. Responda ok15 para alterar mesmo assim.\n• perto de ${descreverEventoCurto(regra.ev)}`);
+    }
+
+    const { titulo, descricao, eventBody } = montarEvento(dadosDoEventoBot(r, c));
+    eventBody.description = novaDescricao(ev.description, a.descricaoGerada, descricao);
+    if (r.calId === a.calId) {
+      await calendar.events.patch({ calendarId: a.calId, eventId: a.eventoId, requestBody: { ...eventBody, colorId: eventBody.colorId || null } });
+    } else {
+      // outra unidade: cria na agenda certa e só então apaga da antiga
+      const novo = await calendar.events.insert({ calendarId: r.calId, requestBody: eventBody });
+      try {
+        await calendar.events.delete({ calendarId: a.calId, eventId: a.eventoId });
+      } catch (e) {
+        await calendar.events.delete({ calendarId: r.calId, eventId: novo.data.id }).catch(() => {});
+        throw e;
+      }
+      a.eventoId = novo.data.id;
+      a.calId = r.calId;
+    }
+    Object.assign(a, { r, c, descricaoGerada: descricao, titulo });
+    await enviarConfirmacaoAgendamento(rid, "✏️ Alterado:");
+  } catch (e) {
+    await responder(`❌ Erro ao alterar o evento (${e.message}).`);
+  } finally {
+    a.ocupado = false;
+  }
+}
+
+async function tratarBotaoAgendamento(cq) {
+  const responder = (text, show_alert = false) => telegram("answerCallbackQuery", { callback_query_id: cq.id, text, show_alert });
+  const [, acao, rid] = String(cq.data || "").split(":");
+  const chatId = String(cq.message?.chat?.id || "");
+  const userId = String(cq.from?.id || "");
+  if (!podeAgendar(userId) && !podeAgendar(chatId)) return responder("Só a equipe autorizada pode usar estes botões.", true);
+  const a = agendamentosBot.get(rid);
+  if (!a) {
+    await responder("Esse agendamento não está mais na memória do bot.", true);
+    return;
+  }
+  if (a.desfeito) return responder("Esse agendamento já foi desfeito.");
+
+  if (acao === "alt") {
+    alterarPendente[`${chatId}:${userId}`] = rid;
+    await responder();
+    await sendMessage(chatId, EXEMPLO_ALTERAR, true);
+    return;
+  }
+  if (acao !== "des") return responder();
+  if (Date.now() - a.criado > DESFAZER_PRAZO_MS) {
+    await responder("Passou o prazo do desfazer.");
+    await sendMessage(chatId, "Passou o prazo do desfazer. Se precisar, apague direto no Google Agenda.", true);
+    return;
+  }
+  if (a.ocupado) return responder("Um instante, ainda estou cuidando do toque anterior…");
+  a.ocupado = true;
+  try {
+    // apaga só o evento criado por esta ação (pelo id guardado)
+    await calendar.events.delete({ calendarId: a.calId, eventId: a.eventoId });
+    a.desfeito = true;
+    await telegram("editMessageText", { chat_id: chatId, message_id: cq.message.message_id, text: `↩️ Desfeito: ${resumoAgendamento(a.r, a.c)}`, reply_markup: { inline_keyboard: [] } });
+    await responder("Desfeito: o evento foi apagado da agenda.");
+  } catch (e) {
+    await responder(`Não consegui apagar (${e.message}). Confira no Google Agenda.`, true);
+  } finally {
+    a.ocupado = false;
+  }
+}
+
+// mensagens do !agendar / !alterar. Devolve true quando a mensagem foi tratada aqui.
+async function tratarMensagemAgendamento(message) {
+  const chatId = String(message.chat.id);
+  const userId = String(message.from?.id || chatId);
+  const chave = `${chatId}:${userId}`;
+  const texto = message.text.trim();
+  const tn = texto.toLowerCase();
+  const ehComando = tn.startsWith("!");
+
+  // depois do botão ✏️: a próxima mensagem dessa pessoa é o !alterar daquele agendamento
+  if (alterarPendente[chave]) {
+    const rid = alterarPendente[chave];
+    delete alterarPendente[chave];
+    if (!ehComando || /^!alterar\b/.test(tn)) {
+      await alterarAgendamento(chatId, userId, texto.replace(/^!alterar\s*/i, ""), rid);
+      return true;
+    }
+  }
+
+  const conv = conversasAgendamento[chave];
+  if (conv && !ehComando) {
+    if (tn === "cancelar") { delete conversasAgendamento[chave]; await sendMessage(chatId, "Ok, cancelado. Nada foi criado. 👍", true); return true; }
+    if (conv.passo === "ok15alt") {
+      delete conversasAgendamento[chave];
+      if (normalizar(tn) === "ok15") await alterarAgendamento(chatId, userId, conv.texto, conv.rid, true);
+      else await sendMessage(chatId, "Ok, não alterei. 👍", true);
+      return true;
+    }
+    await responderAgendamento(chave, conv, texto);
+    return true;
+  }
+  if (conv && ehComando) delete conversasAgendamento[chave]; // outro comando: larga a pergunta pendente
+
+  if (/^!alterar\b/.test(tn)) {
+    const rid = agendamentoParaAlterar(chatId, userId, message.reply_to_message?.message_id);
+    if (!rid) {
+      await sendMessage(chatId, "Não achei agendamento seu nas últimas 24h. Responda à mensagem de confirmação (✅ Criado) com o !alterar.", true);
+      return true;
+    }
+    await alterarAgendamento(chatId, userId, texto.replace(/^!alterar\s*/i, ""), rid);
+    return true;
+  }
+
+  // mensagem do site colada (sem comando) = "!agendar " + mensagem
+  const ehMensagemSite = !ehComando && /gostaria de reservar o est[úu]dio/i.test(texto);
+  if (/^!agendar\b/.test(tn) || ehMensagemSite) {
+    const bruto = texto.replace(/^!agendar\s*/i, "").trim();
+    if (!bruto) {
+      await sendMessage(chatId, "Escreva tudo numa linha, ex.: !agendar amanhã 14-16 C Maria 11999998888", true);
+      return true;
+    }
+    await iniciarAgendamento(chave, chatId, userId, bruto);
+    return true;
+  }
+  return false;
+}
+
+// esquece agendamentos antigos (a memória serve para desfazer, alterar e responder à confirmação)
+setInterval(() => {
+  for (const [rid, a] of agendamentosBot) if (Date.now() - a.criado > AGENDAMENTO_MEMORIA_MS) agendamentosBot.delete(rid);
+  for (const [k, rid] of confirmacoesBot) if (!agendamentosBot.has(rid)) confirmacoesBot.delete(k);
+}, 3600 * 1000);
+// ===================== fim do !agendar / !alterar =====================
 
 // =====================================================================
 // CONFERÊNCIA DA AGENDA — SÓ AVISA A EQUIPE NO TELEGRAM
