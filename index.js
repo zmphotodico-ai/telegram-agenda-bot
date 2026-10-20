@@ -835,7 +835,7 @@ function extrairCamposAgendamento(texto) {
 }
 
 // interpreta a frase inteira de agendamento com UMA chamada ao Gemini.
-// devolve { datas:[{dia,mes}], horario:{h1,m1,h2,m2}|null, estudio, nome, telefone } — campos faltantes vêm null.
+// devolve { datas:[{dia,mes}], horario:{h1,m1,h2,m2}|null, estudio, estudios, nome, telefone } — campos faltantes vêm null.
 async function interpretarAgendamento(textoLivre) {
   const bruto = (textoLivre || "").trim();
   const url = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`;
@@ -852,7 +852,7 @@ Devolva um JSON com estes campos (use null quando não houver a informação):
 {
   "datas": ["DD/MM", ...],        // uma ou mais datas concretas
   "horario": "HH:MM-HH:MM",       // início e fim; entenda "das 13h30 às 17h30", "14-16", "9 as 11" etc.
-  "estudio": "A"|"B"|"C"|"D"|"AB"|"1"|"2"|"3",
+  "estudios": ["A"|"B"|"C"|"D"|"AB"|"1"|"2"|"3", ...],  // um ou mais (ex.: "estúdios 1, 2 e 3" -> ["1","2","3"])
   "nome": "só o nome da pessoa",  // NUNCA inclua horário, telefone, data, tipo ou a palavra estúdio aqui
   "telefone": "só dígitos",       // limpe +55, espaços, traços, parênteses. Ex.: 5512988147068
   "tipo": "pre"|"pago"|"zm"|"zm2"|null  // se o texto disser: zm (não cobrar), zm2 (confirmar presença), pago, ou pré
@@ -887,8 +887,9 @@ JSON:`;
       const h = validarHorario(String(obj.horario).replace(/\s/g, "").replace(/h/gi, ":").replace(/:(-|$)/g, "$1"));
       if (h) horario = h;
     }
-    let estudio = null;
-    if (obj.estudio && validarEstudio(String(obj.estudio))) estudio = String(obj.estudio).toUpperCase();
+    const listaIA = Array.isArray(obj.estudios) ? obj.estudios : (obj.estudio ? [obj.estudio] : []);
+    const estudios = [...new Set(listaIA.map(e => String(e).toUpperCase()).filter(e => validarEstudio(e)))];
+    const estudio = estudios[0] || null;
     let telefone = null;
     if (obj.telefone) {
       const dig = String(obj.telefone).replace(/\D/g, "");
@@ -900,10 +901,10 @@ JSON:`;
       const t = String(obj.tipo).toLowerCase().trim();
       if (["pre", "pré", "pago", "zm", "zm2"].includes(t)) tipo = t === "pré" ? "pre" : t;
     }
-    return { datas, horario, estudio, telefone, nome, tipo, _ok: true };
+    return { datas, horario, estudio, estudios, telefone, nome, tipo, _ok: true };
   } catch (e) {
     console.error("Erro ao interpretar agendamento via Gemini:", e.message);
-    return { datas: [], horario: null, estudio: null, telefone: null, nome: null, tipo: null, _ok: false };
+    return { datas: [], horario: null, estudio: null, estudios: [], telefone: null, nome: null, tipo: null, _ok: false };
   }
 }
 
@@ -1043,7 +1044,7 @@ function avisosDaEquipe(regra) {
   const av = regra.avisos || {};
   return (av.foraHorarioSite ? "\nℹ️ Fora do horário do site (9h às 21h) — criado pela equipe." : "") +
     (av.abaixoSite ? `\nℹ️ Abaixo do mínimo do site para fim de semana (${formatarDuracao(av.abaixoSite)}) — criado pela equipe.` : "") +
-    (av.colado ? `\nℹ️ Colado com outro aluguel no mesmo estúdio (intervalo de ${av.colado.intervalo} min).` : "");
+    (av.colado ? `\n⚠️ Colado com outro aluguel no mesmo estúdio (${av.colado.intervalo ? `intervalo de só ${av.colado.intervalo} min` : "sem intervalo"}): ${descreverEventoCurto(av.colado.ev)}.` : "");
 }
 
 async function checarRegrasAluguel(calId, estudio, inicio, fim, ignorarId = null, opcoes = {}) {
@@ -2185,11 +2186,11 @@ app.post("/webhook", async (req, res) => {
           "!confirmarpagamento [telefone] [valor] — marca reservas como pagas (para de cobrar)\n" +
           "!resetaravisos — mostra quantas reservas seriam resetadas (!resetaravisos confirmar executa)\n" +
           "!agenda [estúdio/unidade] [semana/data] — mostra a agenda (ex.: !agenda A semana)\n" +
-          "!conferir — confere a agenda (estúdio errado, sem estúdio ou horário em conflito); só avisa, não muda nada\n" +
+          "!conferir — confere a agenda (estúdio errado, sem estúdio ou horário sobreposto); só avisa, não muda nada\n" +
           "!vagos [estúdio/unidade] [semana/data] — mostra só os horários livres (ex.: !vagos bela vista hoje)\n" +
           "!status — diz se o respondedor está ligado\n" +
           "!ativar / !desativar — liga/desliga o respondedor\n" +
-          "!agendar — cria direto, numa linha só (ex.: !agendar amanhã 14-16 C Maria 11999998888). Sem tipo = pré; acrescente pago 150, zm ou zm2. Várias datas: !agendar 20/10 e 27/10 14-16 C Maria\n" +
+          "!agendar — cria direto, numa linha só (ex.: !agendar amanhã 14-16 C Maria 11999998888). Sem tipo = pré; acrescente pago 150, zm ou zm2. Várias datas: !agendar 20/10 e 27/10 14-16 C Maria. Vários estúdios: !agendar 20/10 14-16 estúdios 1, 2 e 3 Maria\n" +
           "!alterar — muda o último agendamento seu (ou responda à confirmação): !alterar 15-17 · !alterar sábado · !alterar estúdio D · !alterar pago 150 · !alterar tel 11999998888 · !alterar nome Ana\n" +
           "Cole a mensagem do site (Gostaria de reservar o Estúdio...) para agendar direto\n" +
           "!meuid — mostra seu ID\n\n" +
@@ -2744,11 +2745,11 @@ function proximoDiaDaSemana(hojeISO, dw) {
 }
 
 // lê um texto solto de agendamento/alteração. Cada pedaço reconhecido sai do texto; o que sobra é o nome.
-// devolve { datas, horario, estudio, telefone, tipo, pago, nome, sobra }
+// devolve { datas, horario, estudio, estudios, telefone, tipo, pago, nome, sobra } (estudio = o primeiro de estudios)
 function lerTextoAgendamento(texto, { nomeComPalavra = false } = {}) {
   const hoje = hojeEmSP();
   let t = ` ${String(texto || "").replace(/\s+/g, " ")} `;
-  const out = { datas: [], horario: null, estudio: null, telefone: null, tipo: null, pago: null, nome: null, sobra: "" };
+  const out = { datas: [], horario: null, estudio: null, estudios: [], telefone: null, tipo: null, pago: null, nome: null, sobra: "" };
   const tirar = (regex, fn) => { t = t.replace(regex, (...m) => { fn(m); return " ¦ "; }); };
 
   // "nome Ana Paula" (no !alterar): vai até o fim da linha
@@ -2777,8 +2778,16 @@ function lerTextoAgendamento(texto, { nomeComPalavra = false } = {}) {
     const v = validarHorario(`${m[1]}:${m[2] || "00"}-${m[3]}:${m[4] || "00"}`);
     if (v) out.horario = v; else out.sobra += ` ${m[0].trim()}`;
   });
-  tirar(re("(?:est[úu]dio|est\\.?)\\s*(ab|[abcd]|[123])"), m => { out.estudio = m[1].toUpperCase(); });
-  if (!out.estudio) tirar(/(?<![\p{L}\d])(AB|ab|[ABCD]|[bcd]|[123])(?![\p{L}\d])/u, m => { out.estudio = m[1].toUpperCase(); });
+  // um ou mais estúdios: "estúdio C", "estúdios 1, 2 e 3", "1/2/3", "A e C" (minúsculo "a" é artigo, não estúdio A)
+  const EST = "(?:AB|ab|[ABCD]|[bcd]|[123])", SEP = "(?:\\s*[,/+&]\\s*|\\s+e\\s+|\\s+)";
+  const guardarEstudios = (lista) => {
+    for (const e of lista.split(/\s*[,/+&]\s*|\s+e\s+|\s+/)) if (e) out.estudios.push(e.toUpperCase());
+    out.estudios = [...new Set(out.estudios)];
+    out.estudio = out.estudios[0];
+  };
+  // sem a flag "i": depois do primeiro estúdio, "a" minúsculo continua sendo artigo
+  tirar(new RegExp(`${SEM_LETRA_ANTES}[Ee][Ss][Tt](?:[ÚúUu][Dd][Ii][Oo][Ss]?|\\.)?\\s*((?:AB|ab|Ab|[ABCDabcd]|[123])${SEM_LETRA_DEPOIS}(?:${SEP}${EST}${SEM_LETRA_DEPOIS})*)`, "u"), m => guardarEstudios(m[1]));
+  if (!out.estudio) tirar(new RegExp(`${SEM_LETRA_ANTES}(${EST}${SEM_LETRA_DEPOIS}(?:${SEP}${EST}${SEM_LETRA_DEPOIS})*)`, "u"), m => guardarEstudios(m[1]));
 
   // o que sobrou: pedaços entre os marcadores, sem palavras de ligação nas pontas
   const pedacos = t.split("¦").map(s => {
@@ -2880,7 +2889,10 @@ async function seguirAgendamento(chave, conv) {
   const perguntar = async (passo, texto) => { conv.passo = passo; conversasAgendamento[chave] = conv; await sendMessage(conv.chatId, texto, true); };
   if (!conv.datas.length) return perguntar("data", "📅 Qual a data? (ex.: 20/10, amanhã ou sábado)");
   if (!conv.horario) return perguntar("horario", "🕐 Qual o horário? (ex.: 14-16 ou 14:30-16:30)");
-  if (!conv.estudio) return perguntar("estudio", "📸 Qual o estúdio?\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3");
+  const PERGUNTA_ESTUDIO = "📸 Qual o estúdio? (pode ser mais de um, ex.: 1, 2 e 3)\nAclimação: A, B, C, D, AB\nBela Vista: 1, 2, 3";
+  if (!conv.estudios.length) return perguntar("estudio", PERGUNTA_ESTUDIO);
+  const problemaEstudios = problemaNosEstudios(conv.estudios);
+  if (problemaEstudios) { conv.estudios = []; return perguntar("estudio", `⚠️ ${problemaEstudios}\n\n${PERGUNTA_ESTUDIO}`); }
   if (!conv.nome) return perguntar("nome", "👤 Qual o nome do cliente?");
   if (conv.tipo === "pago" && !conv.pago) return perguntar("valor", "💵 Qual o valor pago? (ex.: 150)");
   if (conv.telefone === null && !conv.telefoneBuscado) {
@@ -2893,13 +2905,21 @@ async function seguirAgendamento(chave, conv) {
   await criarAgendamentos(chave, conv);
 }
 
-// cada data é conferida e criada por conta própria; o resultado de cada uma vai numa mensagem
+// vários estúdios no mesmo pedido: todos da mesma unidade, e AB não junto com A ou B (AB já é A+B)
+function problemaNosEstudios(estudios) {
+  const unidades = new Set(estudios.map(e => agendaDoEstudio(e).unidade));
+  if (unidades.size > 1) return "Estúdios de unidades diferentes. Faça um agendamento para cada unidade.";
+  if (estudios.includes("AB") && (estudios.includes("A") || estudios.includes("B"))) return "O AB já é o A e o B juntos; não dá para marcar AB junto com A ou B.";
+  return null;
+}
+
+// cada data (e cada estúdio) é conferida e criada por conta própria; o resultado de cada uma vai numa mensagem
 async function criarAgendamentos(chave, conv) {
   const c = { nome: conv.nome, telefone: conv.telefone, tipo: conv.tipo || "pre", pago: conv.pago || null };
   const criadas = [];
-  for (const dataISO of conv.datas) {
-    const r = montarReserva(dataISO, conv.horario, conv.estudio);
-    const dm = `${dataISO.slice(8, 10)}/${dataISO.slice(5, 7)}`;
+  for (const dataISO of conv.datas) for (const estudio of conv.estudios) {
+    const r = montarReserva(dataISO, conv.horario, estudio);
+    const dm = `${dataISO.slice(8, 10)}/${dataISO.slice(5, 7)}` + (conv.estudios.length > 1 ? ` · estúdio ${estudio}` : "");
     let regra;
     try {
       regra = await checarRegrasAluguel(r.calId, r.estudio, r.inicio, r.fim, null, { equipe: true });
@@ -2940,7 +2960,7 @@ async function iniciarAgendamento(chave, chatId, userId, bruto) {
     if (site.unidadeErrada) await sendMessage(chatId, "⚠️ O estúdio da mensagem não é da unidade citada. Vou perguntar o estúdio.", true);
     const p = (n) => String(n).padStart(2, "0");
     conv = {
-      datas: campos.datas.map(d => `${d.ano}-${p(d.mes)}-${p(d.dia)}`), horario: campos.horario, estudio: campos.estudio,
+      datas: campos.datas.map(d => `${d.ano}-${p(d.mes)}-${p(d.dia)}`), horario: campos.horario, estudios: campos.estudio ? [campos.estudio] : [],
       nome: campos.nome, telefone: campos.telefone ? telefoneInternacional(campos.telefone) : null, tipo: null, pago: null,
     };
   } else {
@@ -2952,7 +2972,7 @@ async function iniciarAgendamento(chave, chatId, userId, bruto) {
       if (ia._ok) {
         if (!conv.datas.length) conv.datas = ia.datas.map(d => dataDeDiaMes(d.dia, d.mes, null, hojeEmSP())).filter(Boolean);
         conv.horario = conv.horario || ia.horario;
-        conv.estudio = conv.estudio || ia.estudio;
+        if (!conv.estudios.length) conv.estudios = ia.estudios;
         if (conv.telefone === null && ia.telefone) conv.telefone = telefoneInternacional(ia.telefone);
         if (ia.nome) conv.nome = ia.nome;
       }
@@ -2988,7 +3008,7 @@ async function responderAgendamento(chave, conv, texto) {
     return seguirAgendamento(chave, conv);
   }
   const lido = lerTextoAgendamento(t);
-  if (conv.passo === "estudio" && !lido.estudio && /^a$/i.test(t)) lido.estudio = "A";
+  if (conv.passo === "estudio" && !lido.estudio && /^a$/i.test(t)) { lido.estudio = "A"; lido.estudios = ["A"]; }
   const faltou = {
     data: [!lido.datas.length, "⚠️ Não entendi a data. Ex.: 20/10, amanhã ou sábado:"],
     horario: [!lido.horario, "⚠️ Não entendi o horário. Ex.: 14-16 ou 14:30-16:30:"],
@@ -2997,7 +3017,7 @@ async function responderAgendamento(chave, conv, texto) {
   if (faltou && faltou[0]) return sendMessage(conv.chatId, faltou[1], true);
   if (lido.datas.length && !conv.datas.length) conv.datas = [...new Set(lido.datas)].sort();
   if (lido.horario && !conv.horario) conv.horario = lido.horario;
-  if (lido.estudio && !conv.estudio) conv.estudio = lido.estudio;
+  if (lido.estudios.length && !conv.estudios.length) conv.estudios = lido.estudios;
   return seguirAgendamento(chave, conv);
 }
 
@@ -3027,6 +3047,7 @@ async function alterarAgendamento(chatId, userId, texto, rid) {
   const mud = lerTextoAgendamento(texto, { nomeComPalavra: true });
   if (mud.sobra) return responder(`⚠️ Não entendi: "${mud.sobra}". Nada foi alterado.\n${EXEMPLO_ALTERAR}`);
   if (mud.datas.length > 1) return responder("⚠️ Uma data por vez no !alterar. Nada foi alterado.");
+  if (mud.estudios.length > 1) return responder("⚠️ Um estúdio por vez no !alterar (cada estúdio tem a sua confirmação). Nada foi alterado.");
   const temMudanca = mud.datas.length || mud.horario || mud.estudio || mud.tipo || mud.telefone !== null || mud.nome;
   if (!temMudanca) return responder(EXEMPLO_ALTERAR);
   if (mud.tipo === "pago" && !mud.pago) return responder("⚠️ Escreva o valor: pago 150. Nada foi alterado.");
@@ -3243,12 +3264,7 @@ async function conferirAgenda(dias = 60) {
           problemas.push(`🔴 ${nomeUn} · conflito no mesmo horário:\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
           continue;
         }
-        // intervalo curto: menos de 15 min entre dois aluguéis do mesmo estúdio (bloqueios não contam)
-        if (a.bloqueio || b.bloqueio) continue;
-        const intervalo = Math.round((a.ini >= b.fim ? a.ini - b.fim : b.ini - a.fim) / 60000);
-        if (intervalo < INTERVALO_MINIMO_MIN) {
-          problemas.push(`⏱️ ${nomeUn} · intervalo curto (${intervalo} min, o mínimo é 15):\n   "${a.titulo}" (${confQuando(a.ini)})\n   "${b.titulo}" (${confQuando(b.ini)})`);
-        }
+        // horário colado não é problema (a equipe pode marcar colado); só sobreposição conta
       }
     }
   }
