@@ -956,8 +956,9 @@ async function horarioOcupado(calId, estudio, inicio, fim) {
 // ===================== REGRAS DE ALUGUEL =====================
 // Site (cliente): das 9h às 21h, em passos de 30 min; mínimo de 2h (sábado, domingo e feriado: 3h na Aclimação e 4h na Bela Vista);
 // 30 min de intervalo entre aluguéis do mesmo estúdio (AB conta com A e com B); 15 a 29 min = "apertado"; menos de 15 min nunca.
-// Telegram (equipe: !agendar, !alterar, mensagem do site colada): mínimo 2h em qualquer dia e sem intervalo obrigatório;
-// só bloqueia sobreposição. Abaixo do mínimo do site ou colado/apertado vira aviso na confirmação.
+// Telegram (equipe: !agendar, !alterar, mensagem do site colada): qualquer horário do dia (00:00 às 23:30), mínimo 2h em
+// qualquer dia e sem intervalo obrigatório; só bloqueia sobreposição. Fora das 9h–21h, abaixo do mínimo do site ou
+// colado/apertado vira aviso na confirmação.
 // Bloqueios/fechamentos (BLOQ, FECHAD, MANUTEN) não exigem intervalo, só não podem sobrepor.
 const ALUGUEL_MIN_MINUTOS = 120;
 const ALUGUEL_MIN_FDS_FERIADO = { aclimacao: 180, belavista: 240 };
@@ -1004,10 +1005,12 @@ function ehBloqueio(ev) {
 // regra pura (sem chamar a agenda): eventos = eventos do mesmo calendário perto do horário.
 // ignorarId: evento que não conta (ex.: o "pré" do próprio pedido, ao virar pago).
 // devolve { status: 'ok' | 'apertado' | 'recusa', motivo, ev, intervalo }
-// equipe: regras do Telegram → { status: 'ok', avisos: { abaixoSite, colado } } ou recusa (sobreposição, < 2h, horário, passo)
+// equipe: regras do Telegram → { status: 'ok', avisos: { abaixoSite, colado, foraHorarioSite } } ou recusa (sobreposição, < 2h, passo, fim antes do início ou em outro dia)
 function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = null, { equipe = false } = {}) {
   const minutosSP = (d) => ((d.getUTCHours() + 21) % 24) * 60 + d.getUTCMinutes(); // São Paulo = UTC−3
-  if (!(fim > inicio) || dataISOemSP(inicio) !== dataISOemSP(fim) || minutosSP(inicio) < HORA_ABRE_MIN || minutosSP(fim) > HORA_FECHA_MIN) return { status: "recusa", motivo: "horario" };
+  if (!(fim > inicio) || dataISOemSP(inicio) !== dataISOemSP(fim)) return { status: "recusa", motivo: "horario" };
+  const foraHorarioSite = minutosSP(inicio) < HORA_ABRE_MIN || minutosSP(fim) > HORA_FECHA_MIN;
+  if (!equipe && foraHorarioSite) return { status: "recusa", motivo: "horario" };
   if (inicio.getUTCMinutes() % 30 || fim.getUTCMinutes() % 30) return { status: "recusa", motivo: "passo" };
   const dur = Math.round((fim - inicio) / 60000);
   const minimoSite = duracaoMinimaMin(unidadeDoEstudio(estudio), dataISOemSP(inicio));
@@ -1031,14 +1034,15 @@ function classificarRegrasAluguel(estudio, inicio, fim, eventos, ignorarId = nul
     if (intervalo < INTERVALO_MINIMO_MIN) return { status: "recusa", motivo: "intervalo", ev, intervalo };
     if (intervalo < INTERVALO_NORMAL_MIN && (!apertado || intervalo < apertado.intervalo)) apertado = { status: "apertado", ev, intervalo };
   }
-  if (equipe) return { status: "ok", avisos: { abaixoSite: dur < minimoSite ? minimoSite : null, colado } };
+  if (equipe) return { status: "ok", avisos: { abaixoSite: dur < minimoSite ? minimoSite : null, colado, foraHorarioSite } };
   return apertado || { status: "ok" };
 }
 
 // avisos da confirmação no Telegram (a equipe pode fugir das regras do site)
 function avisosDaEquipe(regra) {
   const av = regra.avisos || {};
-  return (av.abaixoSite ? `\nℹ️ Abaixo do mínimo do site para fim de semana (${formatarDuracao(av.abaixoSite)}) — criado pela equipe.` : "") +
+  return (av.foraHorarioSite ? "\nℹ️ Fora do horário do site (9h às 21h) — criado pela equipe." : "") +
+    (av.abaixoSite ? `\nℹ️ Abaixo do mínimo do site para fim de semana (${formatarDuracao(av.abaixoSite)}) — criado pela equipe.` : "") +
     (av.colado ? `\nℹ️ Colado com outro aluguel no mesmo estúdio (intervalo de ${av.colado.intervalo} min).` : "");
 }
 
@@ -2855,7 +2859,7 @@ function dadosDoEventoBot(r, c) {
 function motivoDaRecusa(regra, r) {
   const data = r.inicio.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
   if (regra.motivo === "duracao") return `A duração mínima em ${data} é de ${formatarDuracao(regra.minimo)} (este pedido tem ${formatarDuracao(Math.max(0, regra.duracao))}).`;
-  if (regra.motivo === "horario") return "Os aluguéis vão das 9h às 21h.";
+  if (regra.motivo === "horario") return "O fim tem de ser depois do início e no mesmo dia (até 23:30).";
   if (regra.motivo === "passo") return "Use horários de 30 em 30 min (ex.: 14:00 ou 14:30).";
   if (regra.motivo === "conflito") return `O estúdio ${r.estudio} já está ocupado.\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
   return `Intervalo de só ${regra.intervalo} min com outro aluguel (mínimo 15, o normal é 30).\nAluguel que bate: ${descreverEventoCurto(regra.ev)}.`;
